@@ -18,6 +18,18 @@ $qtpath="C:\Program Files\neovim-qt 0.2.19\bin\nvim-qt.exe"
 #
 #
 function Checkout-FileWithDifferentName {
+<#
+.SYNOPSIS
+Checks out a file from a git branch and saves it under a new name.
+.DESCRIPTION
+Stashes local changes to the file, checks it out from the specified branch, renames it to the new name, then restores the stash.
+.PARAMETER FilePath
+Path to the file to check out.
+.PARAMETER NewFileName
+New name/path for the checked-out file.
+.PARAMETER Branch
+Git branch to check out the file from. Defaults to 'main'.
+#>
     param (
         [string]$FilePath,
         [string]$NewFileName,
@@ -55,6 +67,14 @@ function Checkout-FileWithDifferentName {
 
 function ConvertPSObjectToHashtable
 {
+<#
+.SYNOPSIS
+Recursively converts a PSObject to a hashtable.
+.DESCRIPTION
+Handles nested objects and arrays. Useful for working with JSON data (from ConvertFrom-Json) that needs to be mutable or key-accessible as a hashtable.
+.PARAMETER InputObject
+The PSObject, array, or scalar value to convert. Accepts pipeline input.
+#>
     param (
         [Parameter(ValueFromPipeline)]
         $InputObject
@@ -166,6 +186,12 @@ Set-PSReadLineKeyHandler @parameters
 
 function GrepOnCurDir()
 {
+<#
+.SYNOPSIS
+Interactively select a command previously run in the current directory.
+.DESCRIPTION
+Reads the per-directory command history JSON file and presents matching commands for the current directory via fzf.
+#>
     $currentDir = (Get-Location).Path
     $existingCmdLines = Get-Content -Path $global:jsonFile | ConvertFrom-Json 
     $existingCmdLines = ConvertPSObjectToHashtable $existingCmdLines
@@ -173,7 +199,13 @@ function GrepOnCurDir()
 }
 function MyCD
 {
-    try{ 
+<#
+.SYNOPSIS
+Custom cd that records the destination in PSReadLine history.
+.DESCRIPTION
+Wraps Set-Location and appends a 'cd <path>' entry to the PSReadLine history file so directory navigation is searchable via SimpHist/CdLast.
+#>
+    try{
         Set-Location @args
     }catch{ 
         Write-Error "asdas"
@@ -203,6 +235,12 @@ function MyCD
 Set-Alias cd MyCD
 function SimpHistEx
 {
+<#
+.SYNOPSIS
+Fuzzy-search command history and immediately execute the selected entry.
+.DESCRIPTION
+Calls SimpHist to pick a history entry via fzf, inserts it on the command line, and executes it.
+#>
     $va=$(SimpHist)
     [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
     [Microsoft.PowerShell.PSConsoleReadLine]::Insert( $va )
@@ -212,8 +250,14 @@ function SimpHistEx
 
 
 }
-function SimpHist 
+function SimpHist
 {
+<#
+.SYNOPSIS
+Fuzzy-search the full command history and return the selected entry.
+.DESCRIPTION
+Reads the PSReadLine history file, deduplicates entries, and presents them via fzf for interactive selection.
+#>
     $historyLocation = $(Get-PSReadLineOption).HistorySavePath
     $all = Get-Content $historyLocation
     return $($all | Sort-Object -Unique | FZF)
@@ -221,6 +265,12 @@ function SimpHist
 # Function to get history of saved locations
 function StupidHist
 {
+<#
+.SYNOPSIS
+Returns a list of previously visited directories from command history.
+.DESCRIPTION
+Extracts 'cd' entries from the PSReadLine history file and filters to only those that currently exist on disk.
+#>
     $historyLocation = $(Get-PSReadLineOption).HistorySavePath
     $all = Get-Content $historyLocation | select-string -Pattern "^cd .:" | %{ echo ($_ -replace "^cd (.*)","`$1") } | Sort-Object -Unique 
     return $all | Where-Object { Test-Path $($_) }
@@ -228,6 +278,12 @@ function StupidHist
 # Function to change to the last visited location
 function CdLast
 {
+<#
+.SYNOPSIS
+Jump to a previously visited directory using fzf.
+.DESCRIPTION
+Presents the list of known visited directories (from StupidHist) via fzf and navigates to the selected one. Also aliased as 'q'.
+#>
     $location = StupidHist | FZF
     if ($location)
     {
@@ -238,6 +294,12 @@ function CdLast
 Set-Alias q CdLast
 function ConVM
 {
+<#
+.SYNOPSIS
+Opens a PSSession to the local 'win10' Hyper-V virtual machine.
+.DESCRIPTION
+Creates a PowerShell remoting session to the VM named 'win10' using default credentials and returns the session object.
+#>
     $Username = "User"
     $Password = ConvertTo-SecureString "Password1" -AsPlainText -Force
     $Credential = New-Object System.Management.Automation.PSCredential($Username, $Password)
@@ -247,15 +309,37 @@ function ConVM
 
 function ClearShada
 {
-    rm C:\Users\ekarni\AppData\Local\nvim-data\shada\*
+<#
+.SYNOPSIS
+Clears neovim shada (shared data) files and restarts neovim-qt.
+.DESCRIPTION
+Deletes all files in the nvim-data shada directory, then calls ResetNeo to restart the editor.
+#>
+    rm ~\AppData\Local\nvim-data\shada\*
     ResetNeo
 }
 function Which($arg)
 {
+<#
+.SYNOPSIS
+Finds the full path of an executable, similar to Unix 'which'.
+.PARAMETER arg
+The executable name to look up.
+#>
     python -c "import shutil; print(shutil.which('$arg'))"
 }
-function AddWrapper([parameter(mandatory=$true, position=0)][string]$For,[parameter(mandatory=$true, position=1)][string]$To) 
+function AddWrapper([parameter(mandatory=$true, position=0)][string]$For,[parameter(mandatory=$true, position=1)][string]$To)
 {
+<#
+.SYNOPSIS
+Builds a dynamic parameter dictionary that forwards parameters from one function to a wrapper function.
+.DESCRIPTION
+Used in DynamicParam blocks to allow a wrapper function to accept all parameters of the wrapped function, minus those already declared in the wrapper.
+.PARAMETER For
+The name of the function whose parameters should be forwarded.
+.PARAMETER To
+The name of the wrapper function (used to exclude its own declared params).
+#>
     $paramDictionary = [RuntimeDefinedParameterDictionary]::new()
     $paramset= $(Get-Command $For).Parameters.Values | %{[System.Management.Automation.RuntimeDefinedParameter]::new($_.Name,$_.ParameterType,$_.Attributes)}
     $paramsetlet= $(Get-Command empt).Parameters.Keys 
@@ -267,6 +351,18 @@ function AddWrapper([parameter(mandatory=$true, position=0)][string]$For,[parame
 }
 function GetRestOfParams()
 {
+<#
+.SYNOPSIS
+Filters a bound-parameters hashtable to only those accepted by a target function.
+.DESCRIPTION
+Used with AddWrapper to strip out parameters not belonging to the destination function before splatting. The dontincludecommon switch controls whether common/dynamic parameters are included.
+.PARAMETER dstsource
+The destination function name to filter parameters against.
+.PARAMETER params
+The bound parameters hashtable to filter.
+.PARAMETER dontincludecommon
+When set, strips static params of the destination function, keeping only dynamic ones.
+#>
     #if dontincludecommon provide source function else dst function
     Param([parameter(mandatory=$true, position=1)][hashtable]$params, 
         [parameter(mandatory=$true, position=0)][string]$dstsource,
@@ -323,6 +419,20 @@ function Get
     Write-Host "optb",$OptionB
 }
 Function LookFor {
+<#
+.SYNOPSIS
+Find running processes by name, command line, or window title.
+.DESCRIPTION
+Filters Get-Process results using wildcard patterns. Useful for locating specific process instances by their command line or window title.
+.PARAMETER Proc
+Process name pattern (wildcard). Defaults to '*' (all processes).
+.PARAMETER cmd
+Command line pattern (wildcard). Defaults to '*'.
+.PARAMETER Title
+Main window title pattern (wildcard). Defaults to '*'.
+.PARAMETER ShowTable
+If specified, returns a formatted table with Id, Name, MainWindowTitle, and CommandLine columns.
+#>
     param(
         [Parameter(Position=0)]
         [string]$Proc = "*",
@@ -353,17 +463,41 @@ Function LookFor {
 
 Function Term($Proc,$cmd="*")
 {
+<#
+.SYNOPSIS
+Terminates processes matching a name and optional command line pattern.
+.PARAMETER Proc
+Wildcard pattern for the process name.
+.PARAMETER cmd
+Wildcard pattern for the process command line. Defaults to '*'.
+#>
 (Get-Process) | Where { $_.name -like $Proc}    | Where-Object CommandLine -like $cmd | ForEach-Object{Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f ($_.Id)) } | %{ Invoke-CimMethod -InputObject $_ -MethodName Terminate }
 }
 
 Function KillAllPyCharm()
 {
+<#
+.SYNOPSIS
+Kills all PyCharm-related Python and cmd processes.
+.DESCRIPTION
+Terminates python processes associated with the PyCharm debugger (pydevd) and ibsrv, as well as any cmd processes running ibsrv.
+#>
     Term python *pydevd*
     Term python *ibsrv*
     Term cmd *ibsrv*
 }
 Function EditInNeo($ar, $line)
 {
+<#
+.SYNOPSIS
+Opens a file in the running neovim instance (or starts nvim-qt if not running).
+.DESCRIPTION
+Uses nvr (neovim-remote) to open the file in an existing neovim server. If nvr fails, falls back to launching nvim-qt directly. Brings the neovim-qt window to the foreground.
+.PARAMETER ar
+File path to open.
+.PARAMETER line
+Optional line number to jump to.
+#>
     Write-Host $ar $line
     $fileArg = $ar
     if ($line) {
@@ -387,6 +521,14 @@ Function EditInNeo($ar, $line)
 
 Function ResetNeo($a)
 {
+<#
+.SYNOPSIS
+Restarts neovim-qt, optionally opening a file.
+.DESCRIPTION
+Kills all running nvim-qt and nvim processes, then starts a fresh nvim-qt instance. If a file path is provided it is passed as an argument to nvim-qt.
+.PARAMETER a
+Optional file or argument to pass to nvim-qt on startup.
+#>
     #DelProcess nvim-qt
     Term nvim-qt
     Term nvim
@@ -403,22 +545,44 @@ Function ResetNeo($a)
 
 Function DelProcess($name)
 {
+<#
+.SYNOPSIS
+Kills all processes whose name contains the given string.
+.PARAMETER name
+Substring to match against process names.
+#>
     ps | Where-Object -Property ProcessName  -Like "*$name*"| %{Write-Host $_.Id ,$_.ProcessName ;$_.Kill()}
 }
 function TranslatePath($fil)
 {
+<#
+.SYNOPSIS
+Converts a WSL/Linux path to a Windows path using wslpath.
+.PARAMETER fil
+The WSL path to convert.
+#>
     wsl bash -c "wslpath -w '$fil'"
 }
 function RunBash($fil)
 {
-    wsl bash -c "source /home/ekarni/.bash_profile; $fil" 
-}
-function OtherPython($a)
-{
-    Invoke-expression "C:\users\ekarni\AppData\Local\Programs\Python\Python39\python.exe $a"
+<#
+.SYNOPSIS
+Executes a command in WSL bash with the user's bash profile sourced.
+.PARAMETER fil
+The bash command string to execute.
+#>
+    wsl bash -c "source /home/ekarni/.bash_profile; $fil"
 }
 function Show-Window
 {
+<#
+.SYNOPSIS
+Brings a process window to the foreground, restoring it if minimized.
+.DESCRIPTION
+Uses Win32 API (SetForegroundWindow / ShowWindow) to activate the main window of the named process. Strips the .exe extension automatically.
+.PARAMETER ProcessName
+Name of the process whose window should be brought to focus.
+#>
     param(
         [Parameter(Mandatory)]
         [string] $ProcessName
@@ -463,7 +627,14 @@ function Show-Window
 }
 Function Get-LockingProcess
 {
-
+<#
+.SYNOPSIS
+Finds processes that have a lock on a given file or path.
+.DESCRIPTION
+Uses Sysinternals handle.exe to enumerate open handles and returns process info (name, PID, type, user, path) for any process locking the specified path.
+.PARAMETER Path
+The file path or partial name to check for locking processes.
+#>
     [cmdletbinding()]
     Param(
         [Parameter(Position=0, Mandatory=$True,
@@ -512,6 +683,14 @@ Function Get-LockingProcess
 } #end function
 function copy-foldertovirtualmachine
 {
+<#
+.SYNOPSIS
+Copies all files in a folder to a Hyper-V virtual machine.
+.PARAMETER VMName
+Name of the Hyper-V VM to copy files to.
+.PARAMETER FromFolder
+Source folder path. Defaults to the current directory.
+#>
     param(
         [parameter (mandatory = $true, valuefrompipeline = $true)]
         [string]$VMName,
@@ -527,6 +706,12 @@ function copy-foldertovirtualmachine
 
 function NewVMDrive
 {
+<#
+.SYNOPSIS
+Maps the VM's C: drive as a persistent network drive (V:).
+.DESCRIPTION
+Creates a PSDrive pointing to \\192.168.10.2\c$ using stored credentials, making the VM's file system directly accessible from the host.
+#>
     $Username = "user"
     $Password = ConvertTo-SecureString "Password1" -AsPlainText -Force
     $Credential = New-Object System.Management.Automation.PSCredential($Username, $Password)
@@ -534,16 +719,38 @@ function NewVMDrive
 }
 function GetGitStash
 {
+<#
+.SYNOPSIS
+Shows the diff of stash entries named 'mychanges'.
+.DESCRIPTION
+Lists all stash entries, filters by the name 'mychanges', and shows the diff of each matching stash against its parent commit.
+#>
     git stash list | ss mychanges | %{ $_ -replace ":.*$"} | %{ git diff $_^1 $_}
 }
 function  CheckCommit ($n,$line)
 {
+<#
+.SYNOPSIS
+Searches the last N commits for a specific string.
+.PARAMETER n
+Number of recent commits to search.
+.PARAMETER line
+String pattern to search for in each commit's diff.
+#>
     $commits= git log --pretty=format:%h -n $n
     $commits | %{ git show $_ | select-string $line} 
 }
 
 function RemoveCommit([string]$commit)
 {
+<#
+.SYNOPSIS
+Removes a commit from history using interactive rebase (drop).
+.DESCRIPTION
+Looks up the commit hash by its message, then sets GIT_SEQUENCE_EDITOR to a sed command that marks it as 'drop' in the rebase todo list.
+.PARAMETER commit
+Commit message (or part of it) to search for and remove.
+#>
     $commitid=git log --pretty="%h" --grep=$commit
 
 
@@ -565,11 +772,27 @@ $st
 }
 function ExtractFromLastStash($file)
 {
+<#
+.SYNOPSIS
+Gets the diff of a specific file from the most recent stash.
+.PARAMETER file
+Path of the file to extract the diff for.
+#>
     $x=git diff stash@`{0`}^1 stash@`{0`} -- $file 
     return $x
 }
 
 function Checkout-FileFromStash {
+<#
+.SYNOPSIS
+Interactively checks out a single file from a chosen stash entry.
+.DESCRIPTION
+Lists available stashes, prompts the user to pick one by index (if not provided), then runs 'git checkout stash@{N} -- FilePath'.
+.PARAMETER FilePath
+The file path to restore from the stash.
+.PARAMETER StashIndex
+Index of the stash to use (e.g. 0 for stash@{0}). If omitted, the user is prompted.
+#>
     param (
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
@@ -604,6 +827,14 @@ function Checkout-FileFromStash {
 }
 function StashAll($name)
 {
+<#
+.SYNOPSIS
+Creates a named stash without modifying the working tree (silent stash).
+.DESCRIPTION
+Runs 'git stash create' to create a stash object and immediately stores it with a name via 'git stash store', leaving the working tree unchanged.
+.PARAMETER name
+The name/message to assign to the stash entry.
+#>
     git stash store $(git stash create) -m $name
 }
 #function GitPullKeepLocal ()
@@ -666,12 +897,26 @@ function StashAll($name)
 
 function RestartWsl()
 {
+<#
+.SYNOPSIS
+Restarts the WSL (Windows Subsystem for Linux) service.
+.DESCRIPTION
+Restarts the LxssManager service, which forces a full WSL restart.
+#>
     Get-Service LxssManager | Restart-Service
 
 }
 function UpdateVim($typ)
 {
-    cd C:\Users\ekarni
+<#
+.SYNOPSIS
+Downloads and installs a specified neovim release.
+.DESCRIPTION
+Downloads nvim-win64.zip for the given release tag from GitHub, backs up the current Neovim installation to nvim-temp, and extracts the new version.
+.PARAMETER typ
+Release tag to download (e.g. 'nightly', 'v0.9.0').
+#>
+    cd ~ 
     Write-Host "usage: new-version-zip-filename (ie nightly)"
     Remove-Item -Path nvim-win64.zip -ErrorAction SilentlyContinue
     $webClient = New-Object System.Net.WebClient
@@ -706,12 +951,28 @@ function Add-ToPath {
     Write-Host "The path '$PathToAdd' has been added to the system PATH."
 }
 New-Alias gitp GitPullKeepLocal
-function FindGitFile ($x) 
+function FindGitFile ($x)
 {
+<#
+.SYNOPSIS
+Shows the full git history for a file, following renames.
+.PARAMETER x
+File path to trace through git history.
+#>
     git log --follow -- $x
 }
 
 function IIF($condition, $truePart, $falsePart) {
+<#
+.SYNOPSIS
+Ternary-style conditional expression (inline if).
+.PARAMETER condition
+Boolean condition to evaluate.
+.PARAMETER truePart
+Value returned when condition is true.
+.PARAMETER falsePart
+Value returned when condition is false.
+#>
     if ($condition) {
         return $truePart
     } else {
@@ -723,6 +984,20 @@ function IIF($condition, $truePart, $falsePart) {
 
 
 function Ext2 {
+<#
+.SYNOPSIS
+Runs a script block in a new PowerShell window (using 'start' with base64-encoded command).
+.DESCRIPTION
+Encodes the script block as a base64 EncodedCommand and launches a new pwsh process via 'start'. Supports NoExit and custom working directory.
+.PARAMETER ScriptBlock
+The script block to execute in the new window.
+.PARAMETER WorkingDirectory
+Working directory for the new process. Defaults to the current directory.
+.PARAMETER NoExit
+Keep the new window open after the script completes.
+.PARAMETER ArgumentList
+Additional arguments to pass to the new PowerShell process.
+#>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true, Position=0)]
@@ -769,6 +1044,12 @@ function Ext2 {
     Start-Process @startInfo
 }
 function DebugIt {
+<#
+.SYNOPSIS
+Sets up SSH tunnel and kubectl port-forward for remote debugging.
+.DESCRIPTION
+Opens an SSH tunnel to the remote server with local port forwarding, then sets up kubectl port-forward from a running pod to localhost for debugger connectivity.
+#>
     # SSH with port forwarding
     Write-Host "Setting up SSH tunnel for debugging..." -ForegroundColor Cyan
     Start-Process powershell -ArgumentList "-Command ssh ubuntu@54.228.92.153 -L1234:localhost:8888"
@@ -784,12 +1065,19 @@ function DebugIt {
     }
 }
 
-function SendReq {
-    # Run the websocket client
-    Write-Host "Sending request via websocket client..." -ForegroundColor Cyan
-    & "C:\Users\ekarni\.pyenv\pyenv-win\versions\3.13\python3.13t.exe" c:\gitproj\chess_analyzer\websocket_client.py xx
-}
 function Select-Zip {
+<#
+.SYNOPSIS
+Zips two sequences together, similar to Python's zip() or enumerate().
+.DESCRIPTION
+Uses LINQ Enumerable.Zip to pair elements from two sequences. When only one sequence is provided, it zips with an infinite index (enumerate behavior).
+.PARAMETER First
+The first sequence to zip.
+.PARAMETER Second
+The second sequence to zip. Defaults to an integer counter (enumerate mode).
+.PARAMETER ResultSelector
+A script block that defines how to combine elements. Defaults to returning an array of both elements.
+#>
 [CmdletBinding()]
 Param(
     [Parameter(Mandatory=$true, Position=0)]
@@ -810,7 +1098,17 @@ if ($PSBoundParameters.Count -eq 1) {
 [System.Linq.Enumerable]::Zip($First, $Second, [Func[Object, Object, Object[]]]$ResultSelector)
 } 
 
-function Tuple-Zip { 
+function Tuple-Zip {
+<#
+.SYNOPSIS
+Zips two arrays into an array of typed System.Tuple objects.
+.DESCRIPTION
+Uses Select-Zip to pair elements and wraps each pair in a System.Tuple, scaling the second array's values by 100.
+.PARAMETER Array1
+The first array.
+.PARAMETER Array2
+The second array (values multiplied by 100 in the resulting tuples).
+#>
     param (
         [Parameter(Mandatory=$true)]
         [array]$Array1,
@@ -1248,8 +1546,14 @@ no just cancels (type exactly)
  
  function UnfilterList ($ls)
  {
-     Process { 
-         $el=$_; 
+<#
+.SYNOPSIS
+Pipeline filter: passes through items that do NOT match any pattern in the list.
+.PARAMETER ls
+Array of regex patterns to exclude. Pipeline items matching any pattern are dropped.
+#>
+     Process {
+         $el=$_;
          If (-not $( $ls | where { $el -imatch $_}) )
          {
              return $_ 
@@ -1260,8 +1564,14 @@ no just cancels (type exactly)
  
  function FilterList ($ls)
  {
-     Process { 
-         $el=$_; 
+<#
+.SYNOPSIS
+Pipeline filter: passes through items that match at least one pattern in the list.
+.PARAMETER ls
+Array of regex patterns. Only pipeline items matching at least one are kept.
+#>
+     Process {
+         $el=$_;
          If ($( $ls | where { $el -imatch $_}) )
          {
              return $_ 
