@@ -24,7 +24,13 @@ PowerShell/
 | `q`    | `CdLast`             | Jump to a previously visited directory       |
 | `gitp` | `GitPullKeepLocal`   | Git pull keeping local changes               |
 
+## Requirements
+
+- **PowerShell 7+** (`pwsh`) — required for the profile and all key bindings
+
 ## Key Bindings (PSReadLine)
+
+> Requires PowerShell 7+
 
 | Key       | Action                                                        |
 |-----------|---------------------------------------------------------------|
@@ -133,10 +139,14 @@ A PowerShell DSC module for configuring PowerToys settings declaratively. Covers
 - **PowerAccent** – accent character activation key
 - And many more PowerToys modules
 
-## Dependencies
+## Optional Dependencies
 
-- [fzf](https://github.com/junegunn/fzf) — fuzzy finder (used by history/navigation functions)
-- [ripgrep (`rg`)](https://github.com/BurntSushi/ripgrep) — fast file content search
-- [Sysinternals handle.exe](https://learn.microsoft.com/en-us/sysinternals/downloads/handle) — for `Get-LockingProcess`
-- [neovim-qt](https://github.com/equalsraf/neovim-qt) — for Neovim-related functions
-- WSL (Ubuntu) — for WSL integration functions
+These are only needed for specific functions — the profile loads fine without them.
+
+| Dependency | Used By |
+|---|---|
+| [fzf](https://github.com/junegunn/fzf) | `CdLast`, `SimpHist`, `SimpHistEx`, `GrepOnCurDir`, `Alt+q/e/h` keybindings |
+| [ripgrep (`rg`)](https://github.com/BurntSushi/ripgrep) | `FindFileRg` |
+| [Sysinternals handle.exe](https://learn.microsoft.com/en-us/sysinternals/downloads/handle) | `Get-LockingProcess` |
+| [neovim-qt](https://github.com/equalsraf/neovim-qt) | `ClearShada`, `UpdateVim` |
+| WSL (Ubuntu) | `TranslatePath`, `RunBash`, `RestartWsl` |
