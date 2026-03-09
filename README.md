@@ -24,6 +24,27 @@ PowerShell/
 | `q`    | `CdLast`             | Jump to a previously visited directory       |
 | `gitp` | `GitPullKeepLocal`   | Git pull keeping local changes               |
 
+## Install
+
+Clone into the PowerShell profile directory (or pull if it already exists):
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$repoUrl  = 'git@github.com:eyalbold/.powershell.git'
+$destDir  = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell'
+
+if (-not (Test-Path $destDir)) {
+    git clone $repoUrl $destDir
+} else {
+    Write-Warning "'$destDir' already exists — pulling latest instead"
+    Push-Location $destDir
+    git fetch origin
+    git checkout main
+    git pull origin main
+    Pop-Location
+}
+```
+
 ## Requirements
 
 - **PowerShell 7+** (`pwsh`) — required for the profile and all key bindings
