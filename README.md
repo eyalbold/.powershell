@@ -40,14 +40,9 @@ if (-not (Test-Path $destDir)) {
     Push-Location $destDir
     git fetch origin
     git checkout main
-    git pull origin main
     Pop-Location
 }
 ```
-
-## Requirements
-
-- **PowerShell 7+** (`pwsh`) — required for the profile and all key bindings
 
 ## Key Bindings (PSReadLine)
 
@@ -119,13 +114,6 @@ if (-not (Test-Path $destDir)) {
 | `copy-foldertovirtualmachine`| Copy a folder's contents into a Hyper-V VM             |
 | `NewVMDrive`                | Create a new VM drive                                    |
 
-### Neovim
-
-| Function     | Description                                            |
-|--------------|--------------------------------------------------------|
-| `ClearShada` | Clear neovim shada files and restart neovim-qt         |
-| `UpdateVim`  | Download and install a neovim release from GitHub      |
-
 ### Data & Utilities
 
 | Function                   | Description                                                               |
@@ -164,10 +152,10 @@ A PowerShell DSC module for configuring PowerToys settings declaratively. Covers
 
 These are only needed for specific functions — the profile loads fine without them.
 
-| Dependency | Used By |
-|---|---|
-| [fzf](https://github.com/junegunn/fzf) | `CdLast`, `SimpHist`, `SimpHistEx`, `GrepOnCurDir`, `Alt+q/e/h` keybindings |
-| [ripgrep (`rg`)](https://github.com/BurntSushi/ripgrep) | `FindFileRg` |
-| [Sysinternals handle.exe](https://learn.microsoft.com/en-us/sysinternals/downloads/handle) | `Get-LockingProcess` |
-| [neovim-qt](https://github.com/equalsraf/neovim-qt) | `ClearShada`, `UpdateVim` |
-| WSL (Ubuntu) | `TranslatePath`, `RunBash`, `RestartWsl` |
+| Dependency                                                                                   | Used By                                                                      |
+|----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| [fzf](https://github.com/junegunn/fzf)                                                      | `CdLast`, `SimpHist`, `SimpHistEx`, `GrepOnCurDir`, `Alt+q/e/h` keybindings |
+| [ripgrep (`rg`)](https://github.com/BurntSushi/ripgrep)                                      | `FindFileRg`                                                                 |
+| [Sysinternals handle.exe](https://learn.microsoft.com/en-us/sysinternals/downloads/handle)  | `Get-LockingProcess`                                                         |
+| PowerShell 7                                                                                 | keybindings                                                                  |
+| WSL (Ubuntu)                                                                                 | `TranslatePath`, `RunBash`, `RestartWsl`                                     |
