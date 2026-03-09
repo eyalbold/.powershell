@@ -8,8 +8,6 @@ Personal PowerShell profile and modules for Windows, with productivity utilities
 PowerShell/
 ├── Microsoft.PowerShell_profile.ps1   # Main profile loaded on every session
 ├── secret.ps1                          # Private config/credentials (not tracked)
-└── Modules/
-    └── Microsoft.PowerToys.Configure/ # DSC module for PowerToys configuration
 ```
 
 ## Aliases
@@ -42,7 +40,16 @@ if (-not (Test-Path $destDir)) {
     git checkout main
     Pop-Location
 }
+
+# Hook into Windows PowerShell 5 profile
+$ps5Profile = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
+$dotSource  = ". $destDir\Microsoft.PowerShell_profile.ps1"
+if (-not (Test-Path $ps5Profile)) {
+    New-Item -ItemType File -Path $ps5Profile -Force | Out-Null
+}
+Add-Content -Path $ps5Profile -Value $dotSource
 ```
+
 
 ## Key Bindings (PSReadLine)
 
