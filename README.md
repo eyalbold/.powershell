@@ -1,14 +1,11 @@
 # PowerShell Profile
 
 Personal PowerShell profile and modules for Windows, with productivity utilities, git helpers, WSL integration, and more.
+The profile is loaded in each powershell session automatically. 
+
 
 ## Structure
 
-```
-PowerShell/
-├── Microsoft.PowerShell_profile.ps1   # Main profile loaded on every session
-├── secret.ps1                          # Private config/credentials (not tracked)
-```
 
 ## Aliases
 
@@ -36,8 +33,11 @@ if (-not (Test-Path $destDir)) {
 } else {
     Write-Warning "'$destDir' already exists — pulling latest instead"
     Push-Location $destDir
-    git fetch origin
-    git checkout main
+    if (-not $(Test-Path .git))
+    { git init }
+    git remote add upstream $repoUrl
+    git fetch upstream
+    git pull upstream/main
     Pop-Location
 }
 
@@ -62,6 +62,12 @@ Add-Content -Path $ps5Profile -Value $dotSource
 | `Alt+h`   | Fuzzy-search the full global command history                  |
 
 ## Functions
+
+### Profile
+
+| Function          | Description                                                        |
+|-------------------|--------------------------------------------------------------------|
+| `ProfileCommands` | List all profile functions with their synopsis and description     |
 
 ### Navigation & History
 
