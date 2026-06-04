@@ -3,6 +3,7 @@ if ($PSVersionTable.PSVersion -like "7*")
     Remove-Alias cd
 }
 Import-Module $PSScriptRoot\common.psm1 -DisableNameChecking
+initalias
 if (Test-path $PSScriptRoot\my.ps1) 
 {
     . $PSScriptRoot\my.ps1

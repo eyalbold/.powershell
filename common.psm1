@@ -10,12 +10,18 @@ function cc
 {
     claude --continue
 }
+function initalias
+{
+    if (-not (get-alias ss -ErrorAction SilentlyContinue))
+    {
 New-Alias ss Select-String
 New-Alias z Get-Help -ErrorAction SilentlyContinue
 New-Alias m Get-Member
 New-Alias P pwsh
 New-Alias gitp GitPullKeepLocal
 New-Alias cl claude
+    }
+}
 
 # Remove the default cd alias
 # Create a new cd function
@@ -581,7 +587,7 @@ The file path or partial name to check for locking processes.
 
     # Define the path to Handle.exe
     # //$Handle = "G:\Sysinternals\handle.exe"
-    $Handle = "C:\SysinternalsSuite\handle.exe"
+    $Handle = "C:\SysinternalsSuite\handle64.exe"
 
     # //[regex]$matchPattern = "(?<Name>\w+\.\w+)\s+pid:\s+(?<PID>\b(\d+)\b)\s+type:\s+(?<Type>\w+)\s+\w+:\s+(?<Path>.*)"
     # //[regex]$matchPattern = "(?<Name>\w+\.\w+)\s+pid:\s+(?<PID>\d+)\s+type:\s+(?<Type>\w+)\s+\w+:\s+(?<Path>.*)"
