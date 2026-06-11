@@ -2270,8 +2270,21 @@ Connection timeout in milliseconds (default 200).
         return $connected
     } catch { return $false }
 }
-function RunClaudeDir($d) 
+function RunClaudeDir($d)
 {
     cd $d
     claude
+}
+
+function duptab {
+    wt -w 0 nt -d $PWD.Path
+}
+Set-Alias dt duptab
+
+function FindMainProcess($name)
+{
+    $procs = Get-CimInstance Win32_Process -Filter "Name LIKE '%$name%'"
+    if (-not $procs) { return }
+    $pids = $procs.ProcessId
+    $procs | Where-Object { $_.ParentProcessId -notin $pids } | Select-Object -ExpandProperty ProcessId
 }
