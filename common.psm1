@@ -32,6 +32,7 @@ Lists all functions in the common module with their synopsis and description.
 #>
     #$ErrorActionPreference=SilentlyContinue
     get-command -module common | %{ get-help $_  } | Format-Table Name, SYNOPSIS ,DESCRIPTION
+    get-command -module bold -ErrorAction SilentlyContinue  | %{ get-help $_  } | Format-Table Name, SYNOPSIS ,DESCRIPTION
 }
 
 function Checkout-FileWithDifferentName {
@@ -2321,6 +2322,69 @@ Kills the main process(es) matching $name and relaunches each from its original 
     @(FindMainProcess $name) | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
     $paths | ForEach-Object { explorer.exe $_ }
 }
+
+function Spawn($path)
+{
+<#
+.SYNOPSIS
+Launches an executable via explorer.exe so it runs under the current user
+shell token (not whatever cmd/elevated token the caller has). Use for
+clean-launch testing of PoC binaries from a debugger / replay step.
+#>
+    if (-not (Test-Path $path)) { Write-Warning "path not found: $path"; return }
+    explorer.exe $path
+}
+function clonenotebook()
+{
+<#
+.SYNOPSIS
+Clones the bold-dev/notebooks repo to $Notebook (defaults to C:\notebook).
+#>
+    $target = if ($global:Notebook) { $global:Notebook } else { 'C:\notebook' }
+    if (Test-Path $target) { Write-Warning "$target already exists"; return }
+    git clone https://github.com/bold-dev/notebooks $target
+}
+function IsAdmin()
+{
+<#
+.SYNOPSIS
+Returns $true if the current pwsh session is elevated (running as Administrator).
+#>
+    ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+function RunWindowsMcp([switch]$NoAdmin)
+{
+<#
+.SYNOPSIS
+Kills any running windows-mcp instance and starts a fresh server via C:\gitproj\Windows-MCP\serve.ps1 in a new pwsh window. Requires admin unless -NoAdmin is passed.
+The previous server usually runs as python.exe (not "windows-mcp"), so we
+locate it by port + commandline rather than process name.
+#>
+    if (-not $NoAdmin -and -not (IsAdmin)) {
+        Write-Error "RunWindowsMcp requires admin. Re-launch pwsh elevated, or pass -NoAdmin to skip the check."
+        return
+    }
+    # 1. Whoever holds the configured port (8000 default).
+    $port = if ($env:WINDOWS_MCP_PORT) { [int]$env:WINDOWS_MCP_PORT } else { 8000 }
+    $owners = Get-NetTCPConnection -LocalPort $port -State Listen `
+                                    -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($pid in $owners) {
+        try { Stop-Process -Id $pid -Force -ErrorAction Stop } catch {}
+    }
+    # 2. Any process whose commandline mentions windows-mcp (covers stdio
+    #    transport instances that don't hold a port).
+    Get-CimInstance Win32_Process |
+        Where-Object { $_.CommandLine -match 'windows[\-_]mcp' -and
+                       $_.ProcessId -ne $PID } |
+        ForEach-Object {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {}
+        }
+    # 3. Belt-and-braces: the literal exe shim if it exists.
+    Get-Process windows-mcp -ErrorAction SilentlyContinue | Stop-Process -Force
+
+    Start-Process pwsh -ArgumentList '-NoExit','-File','C:\gitproj\Windows-MCP\serve.ps1' -WorkingDirectory 'C:\gitproj\Windows-MCP'
+}
 function startfol($file) 
 {
     $x=gi $file  
@@ -2329,4 +2393,8 @@ function startfol($file)
 function GetAppsProcesses
 {
     Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Format-table Id, ProcessName, MainWindowTitle
+}
+function UnicodeConsole 
+{
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $env:PYTHONIOENCODING="utf-8"
 }
