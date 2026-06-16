@@ -2300,8 +2300,23 @@ function FindMainProcess($name, [switch]$getpath)
         $main | Select-Object -ExpandProperty ProcessId
     }
 }
+function Respawn($name)
+{
+<#
+.SYNOPSIS
+Kills the main process(es) matching $name and relaunches each from its original path via Start-Process (runs as current user).
+#>
+    $paths = @(FindMainProcess $name -getpath)
+    if (-not $paths) { Write-Warning "No process found matching '$name'"; return }
+    @(FindMainProcess $name) | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+    $paths | ForEach-Object { explorer.exe $_ }
+}
 function startfol($file) 
 {
     $x=gi $file  
     cmd /C "start  $($x.Directory.FullName)"
+}
+function GetAppsProcesses
+{
+    Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Format-table Id, ProcessName, MainWindowTitle
 }
