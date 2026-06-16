@@ -2288,17 +2288,27 @@ function duptab {
     wt -w 0 nt -d $PWD.Path
 }
 
-function FindMainProcess($name, [switch]$getpath)
+function FindMainProcess($name, [switch]$getpath, [switch]$first)
 {
     $procs = Get-CimInstance Win32_Process -Filter "Name LIKE '%$name%'"
+    if (-not $procs) {
+        # Fallback: resolve by display name (file Description or MainWindowTitle)
+        $matchPids = Get-Process | Where-Object {
+            $_.Description -like "*$name*" -or $_.MainWindowTitle -like "*$name*"
+        } | Select-Object -ExpandProperty Id
+        if ($matchPids) {
+            $procs = $matchPids | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId = $_" }
+        }
+    }
     if (-not $procs) { return }
     $pids = $procs.ProcessId
     $main = $procs | Where-Object { $_.ParentProcessId -notin $pids }
-    if ($getpath) {
+    $out = if ($getpath) {
         $main | Select-Object -ExpandProperty ExecutablePath
     } else {
         $main | Select-Object -ExpandProperty ProcessId
     }
+    if ($first) { $out | Select-Object -First 1 } else { $out }
 }
 function Respawn($name)
 {
