@@ -10,17 +10,15 @@ function cc
 {
     claude --continue
 }
-function initalias
-{
-    if (-not (get-alias ss -ErrorAction SilentlyContinue))
-    {
-New-Alias ss Select-String
-New-Alias z Get-Help -ErrorAction SilentlyContinue
-New-Alias m Get-Member
-New-Alias P pwsh
-New-Alias gitp GitPullKeepLocal
-New-Alias cl claude
-    }
+Set-Alias ss Select-String
+Set-Alias z Get-Help -ErrorAction SilentlyContinue
+Set-Alias m Get-Member
+Set-Alias P pwsh
+Set-Alias gitp GitPullKeepLocal
+Set-Alias cl claude
+Set-Alias dt duptab
+function ci { 
+    claude-history -g 
 }
 
 # Remove the default cd alias
@@ -1992,11 +1990,17 @@ function SetExtendedDisplayPort()
 {
 <#
 .SYNOPSIS
-Sets extended display mode and makes the DisplayPort monitor the primary display.
+Sets extended display mode and makes one of the DisplayPort monitors the primary display.
 .DESCRIPTION
-Finds all DisplayPort-connected monitors via Get-DisplayInfo, enables them as extended displays, and sets the first one as the primary display.
+Finds all DisplayPort-connected monitors via Get-DisplayInfo, enables them as extended displays, and sets the one at PrimaryIndex (1-based) as the primary display.
+.PARAMETER PrimaryIndex
+1-based index of the DisplayPort monitor to make primary. Defaults to 1.
 #>
-    $dpDisplays = Get-DisplayInfo | Where-Object { $_.ConnectionType -eq 'DisplayPort' }
+    param(
+        [ValidateRange(1, 99)]
+        [int]$PrimaryIndex = 1
+    )
+    $dpDisplays = @(Get-DisplayInfo | Where-Object { $_.ConnectionType -eq 'DisplayPort' })
     if (-not $dpDisplays) {
         Write-Warning "No DisplayPort monitor found."
         return
@@ -2006,9 +2010,13 @@ Finds all DisplayPort-connected monitors via Get-DisplayInfo, enables them as ex
     DisplaySwitch.exe /extend
     # Enable as extended (not cloned)
     Enable-Display -DisplayId $dpIds
-    # Set the first DisplayPort display as primary
-    Set-DisplayPrimary -DisplayId $dpIds[0]
-    Write-Host "DisplayPort monitor '$($dpDisplays[0].DisplayName)' (ID $($dpIds[0])) set as extended primary display." -ForegroundColor Green
+    if ($PrimaryIndex -gt $dpIds.Count) {
+        Write-Warning "PrimaryIndex $PrimaryIndex out of range ($($dpIds.Count) DisplayPort monitor(s) found); falling back to 1."
+        $PrimaryIndex = 1
+    }
+    $idx = $PrimaryIndex - 1
+    Set-DisplayPrimary -DisplayId $dpIds[$idx]
+    Write-Host "DisplayPort monitor '$($dpDisplays[$idx].DisplayName)' (ID $($dpIds[$idx])) set as extended primary display." -ForegroundColor Green
 }
 function RunWTAdmin()
 {
@@ -2279,12 +2287,21 @@ function RunClaudeDir($d)
 function duptab {
     wt -w 0 nt -d $PWD.Path
 }
-Set-Alias dt duptab
 
-function FindMainProcess($name)
+function FindMainProcess($name, [switch]$getpath)
 {
     $procs = Get-CimInstance Win32_Process -Filter "Name LIKE '%$name%'"
     if (-not $procs) { return }
     $pids = $procs.ProcessId
-    $procs | Where-Object { $_.ParentProcessId -notin $pids } | Select-Object -ExpandProperty ProcessId
+    $main = $procs | Where-Object { $_.ParentProcessId -notin $pids }
+    if ($getpath) {
+        $main | Select-Object -ExpandProperty ExecutablePath
+    } else {
+        $main | Select-Object -ExpandProperty ProcessId
+    }
+}
+function startfol($file) 
+{
+    $x=gi $file  
+    cmd /C "start  $($x.Directory.FullName)"
 }
