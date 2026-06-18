@@ -131,23 +131,27 @@ The PSObject, array, or scalar value to convert. Accepts pipeline input.
 }
 
 $global:jsonFile = Join-Path -Path $env:USERPROFILE -ChildPath ('cmdLines.json' )
+# Shared shell-state file consumed by window_switcher: map PID -> {title, cwd, time, processid, command}.
+# Concurrent shells coordinate via a named mutex.
+$global:wsStateFile = 'C:\temp\wt_state.json'
 
 $ExecutionContext.InvokeCommand.PostCommandLookupAction = {
-try{ 
+try{
     $cmdLine = $MyInvocation.Line
     if ($args[1].CommandOrigin -ne 'Runspace' -or $cmdLine -match 'PostCommandLookupAction|^prompt$')
-    { return 
+    { return
     }
 
     $currentDir = (Get-Location).Path
 
-    if (!(Test-Path -Path $global:jsonFile))
+    if (!(Test-Path -Path $global:jsonFile) -or (Get-Item $global:jsonFile).Length -eq 0)
     {
         @{ $currentDir = @($cmdLine) } | ConvertTo-Json | Set-Content -Path $global:jsonFile
     } else
     {
-        $existingCmdLines = Get-Content -Path $global:jsonFile | ConvertFrom-Json 
+        $existingCmdLines = Get-Content -Path $global:jsonFile -Raw | ConvertFrom-Json
         $existingCmdLines = ConvertPSObjectToHashtable $existingCmdLines
+        if ($null -eq $existingCmdLines) { $existingCmdLines = @{} }
 
         if (!$existingCmdLines.ContainsKey($currentDir))
         {
@@ -161,7 +165,41 @@ try{
         }
         $existingCmdLines | ConvertTo-Json | Set-Content -Path $global:jsonFile
     }
-    }catch { 
+
+    # window_switcher state export ---
+    $entry = [ordered]@{
+        title     = $Host.UI.RawUI.WindowTitle
+        cwd       = $currentDir
+        time      = [DateTimeOffset]::Now.ToUnixTimeSeconds()
+        processid = $PID
+        command   = $cmdLine
+    }
+    $mutex = New-Object System.Threading.Mutex($false, 'Global\WindowSwitcherStateMutex')
+    try {
+        [void]$mutex.WaitOne(1500)
+        $state = @{}
+        if (Test-Path -LiteralPath $global:wsStateFile) {
+            try {
+                $raw = Get-Content -Raw -LiteralPath $global:wsStateFile -ErrorAction Stop
+                if ($raw) {
+                    $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+                    $state = ConvertPSObjectToHashtable $obj
+                    if ($null -eq $state) { $state = @{} }
+                }
+            } catch { $state = @{} }
+        }
+        foreach ($k in @($state.Keys)) {
+            if (-not (Get-Process -Id ([int]$k) -ErrorAction SilentlyContinue)) {
+                $state.Remove($k)
+            }
+        }
+        $state["$PID"] = $entry
+        $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $global:wsStateFile -Encoding UTF8
+    } finally {
+        [void]$mutex.ReleaseMutex()
+        $mutex.Dispose()
+    }
+    }catch {
 Write-Debug "error in PostCommandLookupAction: $_"
     }
 }
@@ -223,8 +261,10 @@ Interactively select a command previously run in the current directory.
 Reads the per-directory command history JSON file and presents matching commands for the current directory via fzf.
 #>
     $currentDir = (Get-Location).Path
-    $existingCmdLines = Get-Content -Path $global:jsonFile | ConvertFrom-Json 
+    if (!(Test-Path -Path $global:jsonFile) -or (Get-Item $global:jsonFile).Length -eq 0) { return '' }
+    $existingCmdLines = Get-Content -Path $global:jsonFile -Raw | ConvertFrom-Json
     $existingCmdLines = ConvertPSObjectToHashtable $existingCmdLines
+    if ($null -eq $existingCmdLines -or -not $existingCmdLines.ContainsKey($currentDir)) { return '' }
     $existingCmdLines[$currentDir] | fzf
 }
 function MyCD
@@ -389,32 +429,99 @@ Command line pattern (wildcard). Defaults to '*'.
 .PARAMETER Title
 Main window title pattern (wildcard). Defaults to '*'.
 .PARAMETER ShowTable
-If specified, returns a formatted table with Id, Name, MainWindowTitle, and CommandLine columns.
+If specified, returns the raw Process objects instead of the default summary (Id, Name, PrivateMB, CPU(s), MainWindowTitle, CommandLine, Cwd).
+.PARAMETER Tree
+If specified, also includes descendant processes (recursively) of each match, indented under their parent.
+.PARAMETER ParentId
+If specified (non-zero), only include processes whose parent process id equals this value.
 #>
     param(
         [Parameter(Position=0)]
         [string]$Proc = "*",
-        
+
         [Parameter(Position=1)]
         [string]$cmd = "*",
-        
+
         [Parameter()]
         [string]$Title = "*",
-        
+
         [Parameter()]
-        [switch]$ShowTable
+        [switch]$ShowTable,
+
+        [Parameter()]
+        [switch]$Tree,
+
+        [Parameter()]
+        [switch]$Object,
+
+        [Parameter()]
+        [int]$ParentId = 0
     )
-    
-    $processes = Get-Process | Where-Object { 
-        $_.Name -like $Proc -and 
-        $_.CommandLine -like $cmd -and
-        ($_.MainWindowTitle -like $Title)
+
+    $allCim = Get-CimInstance Win32_Process
+    $ppidMap = @{}
+    $pnameMap = @{}
+    $byParent = @{}
+    foreach ($p in $allCim) {
+        $ppidMap[[int]$p.ProcessId] = [int]$p.ParentProcessId
+        $pnameMap[[int]$p.ProcessId] = [string]$p.Name
+        if (-not $byParent.ContainsKey([int]$p.ParentProcessId)) {
+            $byParent[[int]$p.ParentProcessId] = @()
+        }
+        $byParent[[int]$p.ParentProcessId] += $p
     }
-    
-    if ($ShowTable) {
-        $processes | Select-Object Id, Name, MainWindowTitle, CommandLine
+
+    $processes = Get-Process | Where-Object {
+        $_.Name -like $Proc -and
+        $_.CommandLine -like $cmd -and
+        ($_.MainWindowTitle -like $Title) -and
+        ($ParentId -eq 0 -or $ppidMap[[int]$_.Id] -eq $ParentId)
+    }
+
+    if ($Tree) {
+        $allProc = @{}
+        Get-Process | ForEach-Object { $allProc[[int]$_.Id] = $_ }
+
+        $rows = New-Object System.Collections.Generic.List[object]
+        $seen = @{}
+        $emit = {
+            param($pid_, $depth)
+            if ($seen.ContainsKey($pid_)) { return }
+            $seen[$pid_] = $true
+            $proc = $allProc[$pid_]
+            if ($proc) {
+                $rows.Add([pscustomobject]@{
+                    Id              = $proc.Id
+                    PPID            = $ppidMap[[int]$proc.Id]
+                    PName           = $pnameMap[[int]$ppidMap[[int]$proc.Id]]
+                    Name            = ('  ' * $depth) + $proc.Name
+                    PrivateMB       = [math]::Round($proc.PrivateMemorySize64 / 1MB, 1)
+                    'CPU(s)'        = if ($proc.CPU) { [math]::Round($proc.CPU, 1) } else { 0 }
+                    MainWindowTitle = $proc.MainWindowTitle
+                    CommandLine     = $proc.CommandLine
+                    Cwd             = Get-ProcessCwd -Id $proc.Id
+                })
+            }
+            if ($byParent.ContainsKey($pid_)) {
+                foreach ($child in $byParent[$pid_]) {
+                    & $emit ([int]$child.ProcessId) ($depth + 1)
+                }
+            }
+        }
+        foreach ($p in $processes) { & $emit ([int]$p.Id) 0 }
+        $rows
+    }
+    elseif ($ShowTable) {
+        $processes
     } else {
-        $processes 
+        $processes | Select-Object Id, `
+            @{Name='PPID'; Expression={ $ppidMap[[int]$_.Id] }}, `
+            @{Name='PName'; Expression={ $pnameMap[[int]$ppidMap[[int]$_.Id]] }}, `
+            Name, `
+            @{Name='PrivateMB'; Expression={ [math]::Round($_.PrivateMemorySize64 / 1MB, 1) }}, `
+            @{Name='CPU(s)'; Expression={ if ($_.CPU) { [math]::Round($_.CPU, 1) } else { 0 } }}, `
+            MainWindowTitle, CommandLine, `
+            @{Name='Cwd'; Expression={ Get-ProcessCwd -Id $_.Id }}
     }
 }
 
@@ -1105,34 +1212,39 @@ function Find {
      [scriptblock]$exec=$null 
  
  )
-     $act= IIF $noignoreerr Continue SilentlyContinue
- 
-     Get-ChildItem -Path $path -Recurse:$(-not $norecurse) -Force:$(-not $nohidden) -ErrorAction $act |
-     Where-Object { $_.Name -like $name } | Where-Object { $_.FullName -like $fullpath } |  ForEach-Object { 
-         $x=$_
-         $item = switch ($type) {
-             'All' { $x }
-             'File' { if (!$x.PSIsContainer) { $x } }
-             'Directory' { if ($x.PSIsContainer) { $x } }
-         }
-         
-         if ($item) {
-             if ($retitem) {
-                 $item
-             } else {
-                 if ($exec) {
-                     $exec.InvokeWithContext($null, [psvariable]::new('_', $item))
-                 }
-                 
-                 if ($justname) {
-                     $item.Name
-                 } else {
-                     $item.FullName
-                 }
+     $act = if ($noignoreerr) { 'Continue' } else { 'SilentlyContinue' }
+
+     # -Filter is pushed down to Win32 FindFirstFile -> orders of magnitude
+     # faster than post-filtering with Where-Object. Only safe for simple
+     # wildcards; fall back to Where-Object for anything fancier.
+     $gciArgs = @{
+         Path        = $path
+         Recurse     = (-not $norecurse)
+         Force       = (-not $nohidden)
+         ErrorAction = $act
+     }
+     if ($name -and $name -ne '*') { $gciArgs['Filter'] = $name }
+     switch ($type) {
+         'File'      { $gciArgs['File']      = $true }
+         'Directory' { $gciArgs['Directory'] = $true }
+     }
+
+     $needsFullPath = ($fullpath -and $fullpath -ne '*')
+
+     # Streaming pipeline: each item is emitted as soon as it's discovered,
+     # no buffering, no per-item ForEach-Object scriptblock overhead on the
+     # common path.
+     Get-ChildItem @gciArgs | & {
+         process {
+             if ($needsFullPath -and $_.FullName -notlike $fullpath) { return }
+             if ($exec) {
+                 $exec.InvokeWithContext($null, [psvariable]::new('_', $_))
              }
+             if ($retitem)        { $_ }
+             elseif ($justname)   { $_.Name }
+             else                 { $_.FullName }
          }
      }
- 
  }
  
  function FilesInCommit($cmt) {
@@ -2166,6 +2278,13 @@ public static class HotKeyHelper {
 
         $notifyIcon.ContextMenuStrip = $menu
 
+        # Ensure tray icon is removed if the message loop exits for any reason
+        # (graceful runspace shutdown when parent pwsh exits cleanly).
+        $cleanup = {
+            try { if ($notifyIcon) { $notifyIcon.Visible = $false; $notifyIcon.Dispose() } } catch {}
+        }
+        [System.Windows.Forms.Application]::add_ApplicationExit($cleanup)
+
         # Setup hotkey if provided
         if ($TrayHotKey) {
             $hiddenForm = New-Object System.Windows.Forms.Form
@@ -2219,12 +2338,25 @@ public static class HotKeyHelper {
             }
         }
 
-        [System.Windows.Forms.Application]::Run()
+        try {
+            [System.Windows.Forms.Application]::Run()
+        } finally {
+            try { if ($notifyIcon) { $notifyIcon.Visible = $false; $notifyIcon.Dispose() } } catch {}
+        }
     })
 
     $null = $ps.BeginInvoke()
 
     $global:tray=$ps
+    $global:trayRunspace = $runspace
+
+    # Dispose tray cleanly when this pwsh exits, so we don't leak a ghost icon.
+    Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
+        try {
+            if ($global:tray)         { $global:tray.Stop(); $global:tray.Dispose() }
+            if ($global:trayRunspace) { $global:trayRunspace.Close(); $global:trayRunspace.Dispose() }
+        } catch {}
+    } | Out-Null
 
     Write-Host "Tray icon '$Tooltip' created. Right-click and choose 'Exit' to remove it."
     return @{ PowerShell = $ps; Runspace = $runspace }
@@ -2323,15 +2455,20 @@ Kills the main process(es) matching $name and relaunches each from its original 
     $paths | ForEach-Object { explorer.exe $_ }
 }
 
-function Spawn($path)
+function Spawn($path, [switch]$Kill)
 {
 <#
 .SYNOPSIS
 Launches an executable via explorer.exe so it runs under the current user
 shell token (not whatever cmd/elevated token the caller has). Use for
 clean-launch testing of PoC binaries from a debugger / replay step.
+With -Kill, first kills any running process matching the executable's name.
 #>
     if (-not (Test-Path $path)) { Write-Warning "path not found: $path"; return }
+    if ($Kill) {
+        $procName = [System.IO.Path]::GetFileNameWithoutExtension($path)
+        @(FindMainProcess $procName) | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+    }
     explorer.exe $path
 }
 function clonenotebook()
@@ -2394,7 +2531,411 @@ function GetAppsProcesses
 {
     Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Format-table Id, ProcessName, MainWindowTitle
 }
-function UnicodeConsole 
+function UnicodeConsole
 {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $env:PYTHONIOENCODING="utf-8"
+}
+
+Function Get-ProcessCwd {
+<#
+.SYNOPSIS
+Reads the current working directory of a process by reading its PEB. 64-bit only.
+#>
+    param([Parameter(Mandatory)][int]$Id)
+    if (-not ('Util.PebReader' -as [type])) {
+        Add-Type -NameSpace Util -Name PebReader -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError=true)]
+public static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+[DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool CloseHandle(IntPtr h);
+[DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr read);
+[DllImport("ntdll.dll")]
+public static extern int NtQueryInformationProcess(IntPtr h, int infoClass, IntPtr buf, int len, out int ret);
+'@
+    }
+    $h = [Util.PebReader]::OpenProcess(0x1010, $false, $Id)
+    if ($h -eq [IntPtr]::Zero) { return $null }
+    try {
+        $pbi = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(48)
+        try {
+            $rl = 0
+            if ([Util.PebReader]::NtQueryInformationProcess($h, 0, $pbi, 48, [ref]$rl) -ne 0) { return $null }
+            $peb = [System.Runtime.InteropServices.Marshal]::ReadIntPtr($pbi, 8)
+        } finally { [System.Runtime.InteropServices.Marshal]::FreeHGlobal($pbi) }
+        $buf = New-Object byte[] 8; $r = [IntPtr]::Zero
+        if (-not [Util.PebReader]::ReadProcessMemory($h, [IntPtr]([long]$peb + 0x20), $buf, [IntPtr]8, [ref]$r)) { return $null }
+        $procParams = [IntPtr][BitConverter]::ToInt64($buf, 0)
+        $us = New-Object byte[] 16
+        if (-not [Util.PebReader]::ReadProcessMemory($h, [IntPtr]([long]$procParams + 0x38), $us, [IntPtr]16, [ref]$r)) { return $null }
+        $len = [BitConverter]::ToUInt16($us, 0)
+        if ($len -eq 0) { return '' }
+        $bufPtr = [IntPtr][BitConverter]::ToInt64($us, 8)
+        $str = New-Object byte[] $len
+        if (-not [Util.PebReader]::ReadProcessMemory($h, $bufPtr, $str, [IntPtr]$len, [ref]$r)) { return $null }
+        ([System.Text.Encoding]::Unicode.GetString($str)).TrimEnd('\')
+    } finally { [Util.PebReader]::CloseHandle($h) | Out-Null }
+}
+
+# --- Generic parameter-forwarding helpers (from previous monolithic profile) ---
+
+function AddWrapper([parameter(mandatory=$true, position=0)][string]$For,[parameter(mandatory=$true, position=1)][string]$To)
+{
+    $paramDictionary = [System.Management.Automation.RuntimeDefinedParameterDictionary]::new()
+    $paramset= $(Get-Command $For).Parameters.Values | %{[System.Management.Automation.RuntimeDefinedParameter]::new($_.Name,$_.ParameterType,$_.Attributes)}
+    $paramsetlet= $(Get-Command empt).Parameters.Keys
+    $paramsetlet+= $(Get-Command $To).ScriptBlock.Ast.Body.ParamBlock.Parameters.Name | %{ $_.VariablePath.UserPath }
+    $paramset | %{ if ( -not ($paramsetlet -contains $_.Name) )
+        {$paramDictionary.Add($_.Name,$_)
+        }}
+    return $paramDictionary
+}
+
+function GetRestOfParams()
+{
+    Param([parameter(mandatory=$true, position=1)][hashtable]$params,
+        [parameter(mandatory=$true, position=0)][string]$dstsource,
+        [parameter(mandatory=$false, position=2)][switch][bool]$dontincludecommon=$true)
+    $dstorgparams=$(Get-Command $dstsource).Parameters.Keys
+    $z= $params
+    if ( -not $dontincludecommon)
+    {
+        $z.Keys | %{ if ( -not ($dstorgparams -contains $_) )
+            {$z.Remove($_)
+            } } | Out-Null
+    } else
+    {
+        $dyn= $(Get-Command $dstsource).Parameters.Values | Where-Object -Property IsDynamic -Eq $false
+        $dyn | %{ $z.Remove($_.Name) } | Out-Null
+    }
+    return $z
+}
+
+function Empt
+{
+    [CmdletBinding()]
+    Param([parameter(mandatory=$true, position=0)][string]$aaaa)
+    1
+}
+
+function Let
+{
+    [CmdletBinding()]
+    Param([parameter(mandatory=$true, position=0)][string]$Option,[parameter(mandatory=$false, position=0)][string]$OptionB)
+    DynamicParam
+    {
+        AddWrapper -For Get -To $MyInvocation.MyCommand.Name
+    }
+    Begin
+    {
+        $params = GetRestOfParams Let $PSBoundParameters -dontincludecommon
+    }
+    Process
+    {
+        Get @params -OptionB ( $OptionB + "1" )
+    }
+}
+
+function Get
+{
+    [CmdLetBinding()]
+    Param([parameter(mandatory=$false, position=0)][string]$OptionA,
+        [parameter(mandatory=$false, position=1)][string]$OptionB)
+    Write-Host "opta",$OptionA
+    Write-Host "optb",$OptionB
+}
+
+function Grant-UserRW {
+<#
+.SYNOPSIS
+Recursively grants the current user read/write (Modify) permission on a path.
+Takes ownership first if the initial icacls grant fails (typical for files
+owned by SYSTEM/TrustedInstaller or another user).
+.PARAMETER Path
+Root file or directory to fix. Defaults to current directory.
+#>
+    param(
+        [Parameter(Position=0)][string]$Path = (Get-Location).Path
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Error "Path not found: $Path"
+        return
+    }
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $user = "$env:USERDOMAIN\$env:USERNAME"
+    Write-Host "Granting Modify to $user on $resolved ..."
+    icacls $resolved /grant "${user}:(OI)(CI)M" /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Initial grant had errors ($LASTEXITCODE). Taking ownership and retrying..."
+        if (Test-Path -LiteralPath $resolved -PathType Container) {
+            takeown /F $resolved /R /D Y | Out-Null
+        } else {
+            takeown /F $resolved | Out-Null
+        }
+        icacls $resolved /grant "${user}:(OI)(CI)M" /T /C | Out-Null
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Done."
+    } else {
+        Write-Warning "icacls finished with exit code $LASTEXITCODE - some items may not have been updated."
+    }
+}
+
+function Repair-Bluetooth {
+<#
+.SYNOPSIS
+Restarts Bluetooth radio adapters stuck in CM_PROB_FAILED_START (Code 10).
+.DESCRIPTION
+When Windows reports Bluetooth as off but bthserv is running, the radio
+adapter itself may have failed to start (typically NTStatus 0xC000025E
+STATUS_DEVICE_POWER_FAILURE). Disable/Enable-PnpDevice often does NOT clear
+this; pnputil /restart-device does. Requires elevation.
+#>
+    param(
+        [string]$Match = '*Bluetooth*'
+    )
+    $radios = Get-PnpDevice -Class Bluetooth | Where-Object {
+        $_.FriendlyName -like $Match -and $_.InstanceId -like 'USB\*'
+    }
+    if (-not $radios) { Write-Warning "No Bluetooth USB radio matched '$Match'."; return }
+    foreach ($r in $radios) {
+        Write-Host "$($r.FriendlyName)  Status=$($r.Status)  Problem=$($r.Problem)"
+        if ($r.Status -ne 'OK') {
+            pnputil /restart-device $r.InstanceId
+            Start-Sleep -Seconds 2
+            Get-PnpDevice -InstanceId $r.InstanceId | Format-List FriendlyName,Status,Problem
+        } else {
+            Write-Host "  (already OK, skipping)"
+        }
+    }
+}
+
+function ConvertTo-LineEnding {
+<#
+.SYNOPSIS
+Convert line endings of a file in place (LF <-> CRLF). Preserves bytes otherwise.
+#>
+    param(
+        [Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][ValidateSet('LF','CRLF')][string]$Eol
+    )
+    process {
+        $resolved = (Resolve-Path -LiteralPath $Path).Path
+        $bytes = [System.IO.File]::ReadAllBytes($resolved)
+        # Strip CR (0x0D); for CRLF, re-insert before each LF (0x0A).
+        $out = New-Object System.Collections.Generic.List[byte]
+        foreach ($b in $bytes) {
+            if ($b -eq 0x0D) { continue }
+            if ($Eol -eq 'CRLF' -and $b -eq 0x0A) { $out.Add([byte]0x0D) }
+            $out.Add($b)
+        }
+        [System.IO.File]::WriteAllBytes($resolved, $out.ToArray())
+        Write-Host "$Eol  $resolved"
+    }
+}
+
+function dos2unix {
+    param([Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string[]]$Path)
+    process { foreach ($p in $Path) { ConvertTo-LineEnding -Path $p -Eol LF } }
+}
+
+function unix2dos {
+    param([Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string[]]$Path)
+    process { foreach ($p in $Path) { ConvertTo-LineEnding -Path $p -Eol CRLF } }
+}
+
+Set-Alias windows2dos unix2dos
+
+function tail {
+<#
+.SYNOPSIS
+Unix-like tail. Prints the last N lines of a file; -f follows for new content.
+#>
+    param(
+        [Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string]$Path,
+        [Alias('n')][int]$Lines = 10,
+        [Alias('f')][switch]$Follow
+    )
+    process {
+        if ($Follow) { Get-Content -LiteralPath $Path -Tail $Lines -Wait }
+        else         { Get-Content -LiteralPath $Path -Tail $Lines }
+    }
+}
+
+function Invoke-NotebookCell {
+<#
+.SYNOPSIS
+Run a single Jupyter notebook cell (by index or substring match) with all preceding code cells included so dependencies are satisfied.
+.PARAMETER Path
+Path to the .ipynb file.
+.PARAMETER Index
+Zero-based cell index to run.
+.PARAMETER Match
+Substring matched against each code cell's source; first hit wins.
+.PARAMETER Python
+Python executable used to run nbconvert. Defaults to .\.venv11\Scripts\python.exe if present, else 'python'.
+.PARAMETER Kernel
+Jupyter kernel name. Default 'python3'.
+.PARAMETER Timeout
+Per-cell execution timeout in seconds. Default 120.
+#>
+    [CmdletBinding(DefaultParameterSetName='ByIndex')]
+    param(
+        [Parameter(Mandatory=$true, Position=0)][string]$Path,
+        [Parameter(Mandatory=$true, ParameterSetName='ByIndex')][int]$Index,
+        [Parameter(Mandatory=$true, ParameterSetName='ByMatch')][string]$Match,
+        [string]$Python,
+        [string]$Kernel = 'python3',
+        [int]$Timeout = 120
+    )
+
+    if (-not (Test-Path $Path)) { throw "Notebook not found: $Path" }
+    $Path = (Resolve-Path $Path).Path
+
+    if (-not $Python) {
+        $cand = Join-Path (Get-Location) '.venv11\Scripts\python.exe'
+        $Python = if (Test-Path $cand) { $cand } else { 'python' }
+    }
+
+    $tmpIn  = [IO.Path]::GetTempFileName() + '.ipynb'
+    $tmpOut = [IO.Path]::GetTempFileName() + '.ipynb'
+
+    $py = @"
+import json, sys
+src   = json.load(open(r'$Path','r',encoding='utf-8'))
+mode  = '$($PSCmdlet.ParameterSetName)'
+idx   = $Index
+match = r'''$Match'''
+cells = src['cells']
+target = None
+if mode == 'ByIndex':
+    if idx < 0 or idx >= len(cells):
+        sys.exit(f'index {idx} out of range (0..{len(cells)-1})')
+    target = idx
+else:
+    for i,c in enumerate(cells):
+        if c.get('cell_type') == 'code' and match in ''.join(c.get('source', [])):
+            target = i; break
+    if target is None:
+        sys.exit(f'no code cell matched: {match!r}')
+keep = []
+for i,c in enumerate(cells[:target+1]):
+    if c.get('cell_type') == 'code':
+        nc = dict(c)
+        nc['outputs'] = []
+        nc['execution_count'] = None
+        keep.append(nc)
+src['cells'] = keep
+src.setdefault('metadata', {}).setdefault('kernelspec', {'name':'$Kernel','display_name':'$Kernel'})
+json.dump(src, open(r'$tmpIn','w',encoding='utf-8'), ensure_ascii=False)
+print(f'target={target} kept={len(keep)}')
+"@
+    $py | & $Python -
+
+    if ($LASTEXITCODE -ne 0) { Remove-Item -EA SilentlyContinue $tmpIn,$tmpOut; return }
+
+    $env:PYTHONNOUSERSITE = '1'
+    $exec = @"
+import sys, nbformat
+from nbclient import NotebookClient
+nb = nbformat.read(r'$tmpIn', as_version=4)
+client = NotebookClient(nb, timeout=$Timeout, kernel_name='$Kernel', allow_errors=True)
+client.execute()
+nbformat.write(nb, r'$tmpOut')
+print('[exec] done')
+"@
+    $exec | & $Python -
+
+    $report = @"
+import json
+nb = json.load(open(r'$tmpOut','r',encoding='utf-8'))
+last = nb['cells'][-1]
+print('--- target cell source ---')
+print(''.join(last.get('source', []))[:400])
+print('--- outputs ---')
+err = False
+for o in last.get('outputs', []):
+    t = o.get('output_type')
+    if t == 'stream':
+        name = o.get('name','stdout')
+        print('[' + name + ']')
+        print(''.join(o.get('text', [])))
+    elif t == 'error':
+        err = True
+        print('[ERROR] ' + str(o.get('ename')) + ': ' + str(o.get('evalue')))
+        for line in o.get('traceback', []):
+            print(line)
+    elif t in ('execute_result','display_data'):
+        d = o.get('data', {})
+        txt = d.get('text/plain')
+        if isinstance(txt, list): txt = ''.join(txt)
+        head = (txt[:400] if txt else str(list(d.keys())))
+        print('[' + t + '] ' + head)
+import sys; sys.exit(2 if err else 0)
+"@
+    $report | & $Python -
+    $rc = $LASTEXITCODE
+    Remove-Item -EA SilentlyContinue $tmpIn,$tmpOut
+    if ($rc -eq 2) { Write-Host 'cell raised an exception' -ForegroundColor Red }
+}
+
+function Show-Balloon {
+<#
+.SYNOPSIS
+Displays a Windows tray balloon / toast notification.
+.DESCRIPTION
+Pops a Windows shell notification using a temporary NotifyIcon. On Win10/11 the
+balloon is rendered by the OS as a toast (so it lands in Action Center too).
+The tray icon is disposed automatically after the balloon hides or after
+-Timeout milliseconds (whichever comes first).
+.PARAMETER Text
+Notification body. Required.
+.PARAMETER Title
+Notification title. Defaults to 'PowerShell'.
+.PARAMETER Icon
+Tip icon: None | Info | Warning | Error. Default Info.
+.PARAMETER Timeout
+Visible duration in milliseconds. Windows usually clamps this to its own
+default (5-10s), so treat this as a hint. Default 5000.
+.EXAMPLE
+Show-Balloon -Title 'Build' -Text 'Compile finished' -Icon Info
+.EXAMPLE
+'done' | Show-Balloon -Title 'Job'
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string]$Text,
+        [Parameter(Position=1)][string]$Title = 'PowerShell',
+        [ValidateSet('None','Info','Warning','Error')][string]$Icon = 'Info',
+        [int]$Timeout = 5000
+    )
+    process {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $ni = New-Object System.Windows.Forms.NotifyIcon
+        try {
+            $ni.Icon = [System.Drawing.SystemIcons]::Information
+            $ni.BalloonTipIcon  = [System.Windows.Forms.ToolTipIcon]::$Icon
+            $ni.BalloonTipTitle = $Title
+            $ni.BalloonTipText  = $Text
+            $ni.Visible = $true
+            $ni.ShowBalloonTip($Timeout)
+            # Dispose either when the balloon closes or after Timeout (whichever).
+            $closed = {
+                param($s,$e)
+                try { $s.Visible = $false; $s.Dispose() } catch {}
+            }
+            $ni.add_BalloonTipClosed($closed)
+            $ni.add_BalloonTipClicked($closed)
+            Start-Sleep -Milliseconds ([Math]::Min($Timeout, 10000))
+        } finally {
+            try { if ($ni.Visible) { $ni.Visible = $false; $ni.Dispose() } } catch {}
+        }
+    }
+}
+function outhost
+{
+    [CmdletBinding()]
+    param([Parameter(ValueFromPipeline=$true)] $InputObject)
+    process { $InputObject | %{ Write-Host $_ }  }
 }
