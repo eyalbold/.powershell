@@ -133,76 +133,6 @@ The PSObject, array, or scalar value to convert. Accepts pipeline input.
 $global:jsonFile = Join-Path -Path $env:USERPROFILE -ChildPath ('cmdLines.json' )
 # Shared shell-state file consumed by window_switcher: map PID -> {title, cwd, time, processid, command}.
 # Concurrent shells coordinate via a named mutex.
-$global:wsStateFile = 'C:\temp\wt_state.json'
-
-$ExecutionContext.InvokeCommand.PostCommandLookupAction = {
-try{
-    $cmdLine = $MyInvocation.Line
-    if ($args[1].CommandOrigin -ne 'Runspace' -or $cmdLine -match 'PostCommandLookupAction|^prompt$')
-    { return
-    }
-
-    $currentDir = (Get-Location).Path
-
-    if (!(Test-Path -Path $global:jsonFile) -or (Get-Item $global:jsonFile).Length -eq 0)
-    {
-        @{ $currentDir = @($cmdLine) } | ConvertTo-Json | Set-Content -Path $global:jsonFile
-    } else
-    {
-        $existingCmdLines = Get-Content -Path $global:jsonFile -Raw | ConvertFrom-Json
-        $existingCmdLines = ConvertPSObjectToHashtable $existingCmdLines
-        if ($null -eq $existingCmdLines) { $existingCmdLines = @{} }
-
-        if (!$existingCmdLines.ContainsKey($currentDir))
-        {
-            $existingCmdLines.Add($currentDir, @($cmdLine))
-        } else
-        {
-            if (!$existingCmdLines[$currentDir].Contains($cmdLine))
-            {
-                $existingCmdLines[$currentDir] += $cmdLine
-            }
-        }
-        $existingCmdLines | ConvertTo-Json | Set-Content -Path $global:jsonFile
-    }
-
-    # window_switcher state export ---
-    $entry = [ordered]@{
-        title     = $Host.UI.RawUI.WindowTitle
-        cwd       = $currentDir
-        time      = [DateTimeOffset]::Now.ToUnixTimeSeconds()
-        processid = $PID
-        command   = $cmdLine
-    }
-    $mutex = New-Object System.Threading.Mutex($false, 'Global\WindowSwitcherStateMutex')
-    try {
-        [void]$mutex.WaitOne(1500)
-        $state = @{}
-        if (Test-Path -LiteralPath $global:wsStateFile) {
-            try {
-                $raw = Get-Content -Raw -LiteralPath $global:wsStateFile -ErrorAction Stop
-                if ($raw) {
-                    $obj = $raw | ConvertFrom-Json -ErrorAction Stop
-                    $state = ConvertPSObjectToHashtable $obj
-                    if ($null -eq $state) { $state = @{} }
-                }
-            } catch { $state = @{} }
-        }
-        foreach ($k in @($state.Keys)) {
-            if (-not (Get-Process -Id ([int]$k) -ErrorAction SilentlyContinue)) {
-                $state.Remove($k)
-            }
-        }
-        $state["$PID"] = $entry
-        $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $global:wsStateFile -Encoding UTF8
-    } finally {
-        [void]$mutex.ReleaseMutex()
-        $mutex.Dispose()
-    }
-    }catch {
-Write-Debug "error in PostCommandLookupAction: $_"
-    }
-}
 $parameters = @{
     Key = 'Alt+q'
     BriefDescription = 'Go to last dir'
@@ -2938,4 +2868,24 @@ function outhost
     [CmdletBinding()]
     param([Parameter(ValueFromPipeline=$true)] $InputObject)
     process { $InputObject | %{ Write-Host $_ }  }
+}
+function CdbAttach {
+    <#
+    .SYNOPSIS
+    Attach cdb to a live PID and expose it as a remote debug server so
+    mcp-windbg (or any windbg remote client) can connect.
+    .EXAMPLE
+    CdbAttach 9700
+    CdbAttach 9700 -Port 5010
+    #>
+    param(
+        [Parameter(Mandatory, Position = 0)] [int]$TargetPid,
+        [int]$Port = 5005
+    )
+    $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
+    if (-not (Test-Path $cdb)) { throw "cdb.exe not found at $cdb" }
+    Write-Host "Attaching cdb to pid=$TargetPid"
+    Write-Host "mcp-windbg connection_string: tcp:Port=$Port,Server=localhost"
+    # -server must be the FIRST argument per cdb's parser.
+    & $cdb -server "tcp:port=$Port" -p $TargetPid
 }
