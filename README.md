@@ -25,7 +25,7 @@ Clone into the PowerShell profile directory (or pull if it already exists):
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$repoUrl  = 'git@github.com:eyalbold/.powershell.git'
+$repoUrl  = 'https://github.com/eyalbold/.powershell.git'
 $destDir  = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell'
 
 if (-not (Test-Path $destDir)) {
