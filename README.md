@@ -53,7 +53,7 @@ Add-Content -Path $ps5Profile -Value $dotSource
 
 ## Key Bindings (PSReadLine)
 
-> Requires PowerShell 7+. **Opt-in only** — disabled by default.
+> **Opt-in only** — disabled by default.
 
 To enable, run once in any PowerShell session:
 
