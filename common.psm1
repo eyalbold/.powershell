@@ -921,6 +921,8 @@ The directory path to append to PATH. No-op if already present.
     param (
         [string]$PathToAdd
     )
+	
+	$PathToAdd = $(gi $PathToAdd).FullName
     # Check if the path already exists in the PATH variable
     $currentPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine)
     if ($currentPath -like "*$PathToAdd;*") {
@@ -931,6 +933,7 @@ The directory path to append to PATH. No-op if already present.
     $newPath = $currentPath + ";" + $PathToAdd
     # Update the system PATH variable
     [System.Environment]::SetEnvironmentVariable("Path", $newPath, [System.EnvironmentVariableTarget]::Machine)
+	$env:PATH +=  ";" + $PathToAdd
     Write-Host "The path '$PathToAdd' has been added to the system PATH."
 }
 function FindGitFile ($x)
@@ -2889,3 +2892,98 @@ function CdbAttach {
     # -server must be the FIRST argument per cdb's parser.
     & $cdb -server "tcp:port=$Port" -p $TargetPid
 }
+function su
+{
+<#
+.SYNOPSIS
+Runs an arbitrary command or scriptblock in an elevated (Administrator) PowerShell session.
+.DESCRIPTION
+Accepts either a scriptblock (su { ... }) or a plain command plus its arguments
+from the remaining args (su make setup). If the current session is already
+elevated (IsAdmin), the command is simply run in place. Otherwise it is
+relaunched via 'start-process -Verb runas'; the elevated child loads the profile
+first (so PATH/helpers are set up), then runs the command and keeps the window
+open with a pause so output stays visible. With no arguments, just opens an
+elevated shell (no-op if already elevated).
+.EXAMPLE
+su make setup
+.EXAMPLE
+su { choco install git -y; refreshenv }
+.EXAMPLE
+su Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
+#>
+    if ($args.Count -eq 1 -and $args[0] -is [scriptblock]) {
+        $cmd = $args[0].ToString()
+    } else {
+        $cmd = $args -join ' '
+    }
+    if (-not $cmd) {
+        if (-not (IsAdmin)) { start-process -Verb runas -FilePath powershell }
+        return
+    }
+    if (IsAdmin) {
+        # already elevated — just run it here
+        Invoke-Expression $cmd
+    } else {
+        start-process -Verb runas -FilePath powershell -ArgumentList @('-Command', @"
+. $PROFILE   # load the profile (pulls in the common module)
+$cmd
+cmd /K pause
+"@)
+    }
+}
+function choco
+{
+<#
+.SYNOPSIS
+Runs choco (Chocolatey) commands in an elevated (Administrator) PowerShell session.
+.DESCRIPTION
+Chocolatey needs an elevated session, so this wrapper delegates to 'su', which
+runs choco.exe in place when already elevated, or relaunches it via
+'start-process -Verb runas' otherwise. The real choco.exe (not this function) is
+invoked to avoid recursion.
+.EXAMPLE
+choco install git -y
+#>
+    su choco.exe @args
+}
+function Update-Environment
+{
+<#
+.SYNOPSIS
+Reloads environment variables from the registry into the current session.
+.DESCRIPTION
+A running process (e.g. a Jupyter PowerShell kernel) keeps the copy of the
+environment it inherited at launch, so changes made via System Properties or
+setx are not visible until restart. This re-reads the Machine and User
+environment scopes from the registry and applies them to the current process
+without restarting. PATH is rebuilt as Machine PATH + User PATH (the effective
+value the OS computes), so entries from either scope are preserved. Values are
+added/overwritten only -- variables deleted from the registry are not removed
+from the current process. Also aliased as 'refreshenv2'.
+.EXAMPLE
+Update-Environment
+#>
+    $scopes = @(
+        @{ Reg = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'; Target = 'Machine' },
+        @{ Reg = 'HKCU:\Environment';                                                  Target = 'User'    }
+    )
+
+    # PATH is the union of Machine + User PATH, so collect it separately.
+    $paths = @()
+    foreach ($s in $scopes) {
+        $key = Get-Item -Path $s.Reg
+        foreach ($name in $key.GetValueNames()) {
+            # Expand %VAR% style values the way the OS would.
+            $value = [Environment]::ExpandEnvironmentVariables($key.GetValue($name, '', 'DoNotExpandEnvironmentNames'))
+            if ($name -ieq 'Path') {
+                if ($value) { $paths += $value }
+            } else {
+                Set-Item -Path "Env:$name" -Value $value
+            }
+        }
+    }
+    $env:Path = ($paths -join ';')
+    Write-Host "Environment reloaded from registry (Machine + User)."
+}
+Set-Alias refreshenv2 Update-Environment
