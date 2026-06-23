@@ -129,56 +129,12 @@ The PSObject, array, or scalar value to convert. Accepts pipeline input.
         }
     }
 }
+function OptInWtKeys
+{
+    echo '$global:enable_wt_keys=$true' > $(Join-Path  $PSScriptRoot "config.ps1")
+}
 
 $global:jsonFile = Join-Path -Path $env:USERPROFILE -ChildPath ('cmdLines.json' )
-# Shared shell-state file consumed by window_switcher: map PID -> {title, cwd, time, processid, command}.
-# Concurrent shells coordinate via a named mutex.
-$parameters = @{
-    Key = 'Alt+q'
-    BriefDescription = 'Go to last dir'
-    LongDescription = 'Go to last dir'
-    ScriptBlock = {
-        param($key, $arg)   # The arguments are ignored in this example
-        CdLast 
-    }
-}
-Set-PSReadLineKeyHandler @parameters
-$parameters = @{
-    Key = 'Alt+e'
-    BriefDescription = 'Execute from last same direrctory'
-    LongDescription = 'Execute from last commands typed in same direrctory'
-    ScriptBlock = {
-        param($key, $arg)   # The arguments are ignored in this example
-        [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-        [Microsoft.PowerShell.PSConsoleReadLine]::Insert( $(GrepOnCurDir) )
-        #[Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
-
-    }
-}
-Set-PSReadLineKeyHandler @parameters
-$parameters = @{
-    Key = 'Alt+h'
-    BriefDescription = 'Grep from last same direrctory'
-    LongDescription = 'Grep from last commands typed globally'
-    ScriptBlock = {
-        param($key, $arg)   # The arguments are ignored in this example
-        [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-        [Microsoft.PowerShell.PSConsoleReadLine]::Insert( $(SimpHist) )
-    }
-}
-Set-PSReadLineKeyHandler @parameters
-$parameters = @{
-    Key = 'Alt+c'
-    BriefDescription = 'Open claude in last dir'
-    LongDescription = 'Pick a previously visited directory via fzf and open claude there'
-    ScriptBlock = {
-        param($key, $arg)
-        [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-        [Microsoft.PowerShell.PSConsoleReadLine]::Insert('ClaudeLast')
-        [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
-    }
-}
-Set-PSReadLineKeyHandler @parameters
 
 
 
