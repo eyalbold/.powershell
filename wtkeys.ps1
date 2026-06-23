@@ -82,13 +82,14 @@ try{
 
     $currentDir = (Get-Location).Path
 
-    if ( -not (Test-Path -Path $global:jsonFile))
+    if ( -not (Test-Path -Path $global:jsonFile) -or (Get-Item $global:jsonFile).Length -eq 0)
     {
-        @{ $currentDir = @($cmdLine) } | ConvertTo-Json -Raw | Set-Content -Path $global:jsonFile
+        @{ $currentDir = @($cmdLine) } | ConvertTo-Json | Set-Content -Path $global:jsonFile
     } else
     {
-        $existingCmdLines = Get-Content -Path $global:jsonFile | ConvertFrom-Json -Raw
+        $existingCmdLines = Get-Content -Path $global:jsonFile -Raw | ConvertFrom-Json
         $existingCmdLines = ConvertPSObjectToHashtable $existingCmdLines
+        if ($null -eq $existingCmdLines) { $existingCmdLines = @{} }
 
         if (!$existingCmdLines.ContainsKey($currentDir))
         {
