@@ -87,7 +87,7 @@ try{
         @{ $currentDir = @($cmdLine) } | ConvertTo-Json -Raw | Set-Content -Path $global:jsonFile
     } else
     {
-        $existingCmdLines = Get-Content -Path $global:jsonFile | ConvertFrom-Json 
+        $existingCmdLines = Get-Content -Path $global:jsonFile | ConvertFrom-Json -Raw
         $existingCmdLines = ConvertPSObjectToHashtable $existingCmdLines
 
         if (!$existingCmdLines.ContainsKey($currentDir))

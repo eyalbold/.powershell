@@ -53,13 +53,22 @@ Add-Content -Path $ps5Profile -Value $dotSource
 
 ## Key Bindings (PSReadLine)
 
-> Requires PowerShell 7+
+> Requires PowerShell 7+. **Opt-in only** — disabled by default.
+
+To enable, run once in any PowerShell session:
+
+```powershell
+OptInWtKeys
+```
+
+This writes `$global:enable_wt_keys=$true` to `config.ps1`, which is loaded automatically on every subsequent session.
 
 | Key       | Action                                                        |
 |-----------|---------------------------------------------------------------|
 | `Alt+q`   | Jump to a previously visited directory (fuzzy via fzf)       |
 | `Alt+e`   | Insert a command previously run in the **current** directory  |
 | `Alt+h`   | Fuzzy-search the full global command history                  |
+| `Alt+c`   | Pick a previously visited directory via fzf and open Claude there |
 
 ## Functions
 
