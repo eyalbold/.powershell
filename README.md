@@ -37,7 +37,8 @@ if (-not (Test-Path $destDir)) {
     { git init }
     git remote add upstream $repoUrl
     git fetch upstream
-    git pull upstream/main
+    if (-not $(Test-Path Microsoft.PowerShell_profile.ps1) )
+    { git pull upstream/main} else { Write-Error "profile exists, please merge" ; Exit 1 } 
     Pop-Location
 }
 
