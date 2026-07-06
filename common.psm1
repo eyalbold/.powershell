@@ -17,8 +17,147 @@ Set-Alias P pwsh
 Set-Alias gitp GitPullKeepLocal
 Set-Alias cl claude
 Set-Alias dt duptab
-function ci { 
-    claude-history -g 
+function ci {
+    claude-history -g
+}
+
+function SearchConv {
+<#
+.SYNOPSIS
+Search past Claude Code conversations for text, then resume the best match right here.
+.DESCRIPTION
+Wraps the /search-conversations skill via `claude -p` (opus model). Claude prints the
+matches plus two marker lines (RESUME_DIR / RESUME_UUID) for the top hit, which are
+parsed here and used to `claude --resume` in that conversation's original directory.
+.EXAMPLE
+SearchConv vimspector setup
+.EXAMPLE
+SearchConv "that bug with the sandbox"
+#>
+    param(
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]]$Query
+    )
+    if (-not $Query) {
+        Write-Error "usage: SearchConv <text>"
+        return
+    }
+    $q = $Query -join ' '
+    $prompt = "/search-conversations $q — show the matches. Then for the single most relevant match, print these two lines last, each alone and exactly in this form (the working directory and session UUID):`nRESUME_DIR: <absolute working dir>`nRESUME_UUID: <session uuid>`nIf there is no good match, print 'RESUME_UUID: NONE' instead."
+
+    $out = claude --model opus -p $prompt
+    $out | Write-Host
+
+    $dirLine = $out | Select-String '^RESUME_DIR:\s*(.*)$' | Select-Object -Last 1
+    $uuidLine = $out | Select-String '^RESUME_UUID:\s*(.*)$' | Select-Object -Last 1
+    $dir = if ($dirLine) { $dirLine.Matches[0].Groups[1].Value.Trim() } else { $null }
+    $uuid = if ($uuidLine) { $uuidLine.Matches[0].Groups[1].Value.Trim() } else { $null }
+
+    if (-not $uuid -or $uuid -eq 'NONE') {
+        Write-Error "SearchConv: no conversation to open"
+        return
+    }
+
+    $resumeDir = if ($dir) { $dir } else { (Get-Location).Path }
+    Write-Host "SearchConv: resuming $uuid in $resumeDir"
+    Push-Location $resumeDir
+    try { claude --resume $uuid } finally { Pop-Location }
+}
+
+function AskClaude {
+<#
+.SYNOPSIS
+Ask Claude a one-off question and print the answer (non-interactive).
+.DESCRIPTION
+Uses Claude Code's print mode (`claude -p`) with Sonnet and no MCP servers loaded
+(--strict-mcp-config with no --mcp-config = zero MCP servers). Takes the question as
+arguments, or reads it from the pipeline if none are given.
+.EXAMPLE
+AskClaude "what is the capital of france?"
+.EXAMPLE
+Get-Content file.py | AskClaude "explain this code"
+#>
+    param(
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]]$Question,
+        [Parameter(ValueFromPipeline)]
+        [string]$InputLine
+    )
+    begin {
+        $flags = @('--model', 'sonnet', '--strict-mcp-config')
+        $piped = [System.Collections.Generic.List[string]]::new()
+    }
+    process {
+        if ($null -ne $InputLine) { $piped.Add($InputLine) }
+    }
+    end {
+        $q = $Question -join ' '
+        if ($piped.Count -gt 0) {
+            $prefix = if ($q) { "$q`n`n" } else { '' }
+            $prompt = $prefix + ($piped -join "`n")
+            claude -p @flags $prompt
+        }
+        elseif ($q) {
+            claude -p @flags $q
+        }
+        else {
+            Write-Error "usage: AskClaude <question>   (or pipe input)"
+        }
+    }
+}
+
+function claude-resume {
+<#
+.SYNOPSIS
+Resume a Claude Code conversation by session id, from any directory.
+.DESCRIPTION
+`claude --resume` scopes to the current project directory, so this locates the
+transcript for <id> under ~/.claude/projects, reads its recorded working directory,
+and resumes from there. Accepts a full session id or a unique prefix. Extra args
+pass through to claude, e.g. `claude-resume <id> --model opus`.
+.EXAMPLE
+claude-resume 6c072c4c-2a4b-4c43-a2b9-12389f66df5f
+#>
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Id,
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]]$ExtraArgs
+    )
+    $projects = Join-Path $HOME '.claude\projects'
+
+    $found = Get-ChildItem -Path $projects -Recurse -Filter "$Id.jsonl" -ErrorAction SilentlyContinue
+    if (-not $found) {
+        $found = Get-ChildItem -Path $projects -Recurse -Filter "$Id*.jsonl" -ErrorAction SilentlyContinue
+    }
+
+    if (-not $found) {
+        Write-Error "claude-resume: no session found for id: $Id"
+        return
+    }
+    if (@($found).Count -gt 1) {
+        Write-Error "claude-resume: ambiguous id '$Id' matches $(@($found).Count) sessions:"
+        $found | ForEach-Object { Write-Error "  $($_.BaseName)" }
+        return
+    }
+
+    $file = $found.FullName
+    $sid = $found.BaseName
+    $cwdMatch = Select-String -Path $file -Pattern '"cwd":"([^"]*)"' | Select-Object -First 1
+    if (-not $cwdMatch) {
+        Write-Error "claude-resume: could not read cwd from $file"
+        return
+    }
+    $dir = $cwdMatch.Matches[0].Groups[1].Value -replace '\\\\', '\'
+
+    if (-not (Test-Path $dir)) {
+        Write-Error "claude-resume: recorded directory no longer exists: $dir"
+        return
+    }
+
+    Write-Host "claude-resume: resuming $sid in $dir"
+    Push-Location $dir
+    try { claude --resume $sid @ExtraArgs } finally { Pop-Location }
 }
 
 # Remove the default cd alias
@@ -129,6 +268,7 @@ The PSObject, array, or scalar value to convert. Accepts pipeline input.
         }
     }
 }
+
 function OptInWtKeys
 {
     echo '$global:enable_wt_keys=$true' > $(Join-Path  $PSScriptRoot "config.ps1")
@@ -2881,8 +3021,11 @@ su Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
         # already elevated — just run it here
         Invoke-Expression $cmd
     } else {
+        # Single-quote-escape the current path so the elevated child starts in the same directory.
+        $cwd = $PWD.Path -replace "'", "''"
         start-process -Verb runas -FilePath powershell -ArgumentList @('-Command', @"
 . $PROFILE   # load the profile (pulls in the common module)
+Set-Location -LiteralPath '$cwd'   # keep the caller's working directory
 $cmd
 cmd /K pause
 "@)
@@ -2943,3 +3086,58 @@ Update-Environment
     Write-Host "Environment reloaded from registry (Machine + User)."
 }
 Set-Alias refreshenv2 Update-Environment
+
+function remsess {
+    <#
+    .SYNOPSIS
+    Run a command or scriptblock on a PSSession with the remote profile loaded first.
+    .PARAMETER Session
+    The PSSession to run on.
+    .PARAMETER ScriptBlock
+    A scriptblock to execute remotely (e.g. { gci c:\ }).
+    .PARAMETER Command
+    A string command to execute remotely (alternative to ScriptBlock).
+    .EXAMPLE
+    remsess $s { gci c:\ } | %{ Write-Host $_ }
+    remsess $s "Get-Process"
+    #>
+    param(
+        [Parameter(Mandatory, Position=0)]
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory, Position=1, ParameterSetName='Block')]
+        [scriptblock]$ScriptBlock,
+
+        [Parameter(Mandatory, Position=1, ParameterSetName='String')]
+        [string]$Command
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'String') {
+        $ScriptBlock = [scriptblock]::Create($Command)
+    }
+
+    Invoke-Command -Session $Session -ScriptBlock {
+        param($sb)
+        . $PROFILE -ErrorAction SilentlyContinue 2>$null
+        & $sb
+    } -ArgumentList $ScriptBlock
+}
+Set-Alias rem remsess
+
+function Reload-Profile {
+    <#
+    .SYNOPSIS
+    Reload the current PowerShell profile.
+    #>
+    . $PROFILE
+}
+Set-Alias reload Reload-Profile
+
+function p {
+    <#
+    .SYNOPSIS
+    Reinvoke the current executable (e.g. restart pwsh in-place).
+    #>
+    $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    & $exe
+}
