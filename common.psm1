@@ -43,7 +43,7 @@ SearchConv "that bug with the sandbox"
         return
     }
     $q = $Query -join ' '
-    $prompt = "/search-conversations $q — show the matches. Then for the single most relevant match, print these two lines last, each alone and exactly in this form (the working directory and session UUID):`nRESUME_DIR: <absolute working dir>`nRESUME_UUID: <session uuid>`nIf there is no good match, print 'RESUME_UUID: NONE' instead."
+    $prompt = "/search-conversations $q - show the matches. Then for the single most relevant match, print these two lines last, each alone and exactly in this form (the working directory and session UUID):`nRESUME_DIR: <absolute working dir>`nRESUME_UUID: <session uuid>`nIf there is no good match, print 'RESUME_UUID: NONE' instead."
 
     $out = claude --model opus -p $prompt
     $out | Write-Host
@@ -2440,6 +2440,31 @@ Connection timeout in milliseconds (default 200).
         return $connected
     } catch { return $false }
 }
+function Kill-Port([Parameter(Mandatory)][int]$Port, [switch]$WhatIf) {
+<#
+.SYNOPSIS
+Kills the process(es) listening on / owning the given TCP port.
+.PARAMETER Port
+Port number whose owning process should be killed.
+.PARAMETER WhatIf
+List the processes that would be killed without killing them.
+#>
+    $procIds = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique |
+        Where-Object { $_ -and $_ -ne 0 }
+    if (-not $procIds) { Write-Warning "No process found on port $Port"; return }
+    foreach ($procId in $procIds) {
+        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        $name = if ($p) { $p.ProcessName } else { '?' }
+        if ($WhatIf) {
+            Write-Host "Would kill PID $procId ($name) on port $Port"
+        } else {
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+            Write-Host "Killed PID $procId ($name) on port $Port"
+        }
+    }
+}
+Set-Alias killport Kill-Port
 function RunClaudeDir($d)
 {
     cd $d
@@ -3018,7 +3043,7 @@ su Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
         return
     }
     if (IsAdmin) {
-        # already elevated — just run it here
+        # already elevated - just run it here
         Invoke-Expression $cmd
     } else {
         # Single-quote-escape the current path so the elevated child starts in the same directory.
@@ -3141,3 +3166,57 @@ function p {
     $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     & $exe
 }
+
+
+function ConvertTo-AsciiFile {
+    <#
+    .SYNOPSIS
+    Rewrite a text file as pure ASCII, transliterating common Unicode punctuation
+    (em/en dashes, smart quotes, ellipsis, arrows, nbsp) to ASCII equivalents.
+    Any remaining non-ASCII char becomes the -Replacement string (default '?').
+    Writes back UTF-8 without BOM (valid ASCII), fixing "read-as-ANSI" parse breakage.
+    .EXAMPLE
+    ConvertTo-AsciiFile .\common.psm1
+    .EXAMPLE
+    Get-ChildItem *.ps1 | ConvertTo-AsciiFile -WhatIf
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName, Position = 0)]
+        [Alias('FullName', 'Path')]
+        [string]$InputPath,
+        [string]$Replacement = '?',
+        [switch]$WhatIf
+    )
+    begin {
+        $map = @{
+            [char]0x2010 = '-'; [char]0x2011 = '-'; [char]0x2012 = '-'; [char]0x2013 = '-'
+            [char]0x2014 = '-'; [char]0x2015 = '-'; [char]0x2018 = "'"; [char]0x2019 = "'"
+            [char]0x201A = "'"; [char]0x201C = '"'; [char]0x201D = '"'; [char]0x201E = '"'
+            [char]0x2026 = '...'; [char]0x2022 = '*'; [char]0x00A0 = ' '; [char]0x2192 = '->'
+            [char]0x2190 = '<-'; [char]0x00AB = '<<'; [char]0x00BB = '>>'; [char]0x00D7 = 'x'
+        }
+    }
+    process {
+        $enc = [System.Text.UTF8Encoding]::new($false)
+        $t = [System.IO.File]::ReadAllText($InputPath, $enc)
+        $sb = [System.Text.StringBuilder]::new($t.Length)
+        $changed = 0
+        foreach ($c in $t.ToCharArray()) {
+            if ([int]$c -le 127) { [void]$sb.Append($c) }
+            elseif ($map.ContainsKey($c)) { [void]$sb.Append($map[$c]); $changed++ }
+            else { [void]$sb.Append($Replacement); $changed++ }
+        }
+        if ($WhatIf) {
+            Write-Host "[WhatIf] $InputPath : $changed non-ASCII char(s) would be converted"
+        }
+        elseif ($changed -gt 0) {
+            [System.IO.File]::WriteAllText($InputPath, $sb.ToString(), $enc)
+            Write-Host "$InputPath : converted $changed non-ASCII char(s) to ASCII"
+        }
+        else {
+            Write-Host "$InputPath : already pure ASCII"
+        }
+    }
+}
+Set-Alias toascii ConvertTo-AsciiFile
