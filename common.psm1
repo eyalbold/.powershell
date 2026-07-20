@@ -276,7 +276,97 @@ function OptInWtKeys
 
 $global:jsonFile = Join-Path -Path $env:USERPROFILE -ChildPath ('cmdLines.json' )
 
+function Read-CmdLinesStore
+{
+<#
+.SYNOPSIS
+Safely read the per-directory command-history store as a hashtable.
+.DESCRIPTION
+Returns an empty hashtable if the file is missing, empty, or corrupt (e.g. a torn concurrent write). Never throws, so callers and the PostCommandLookupAction hook can't surface a JSON parse error.
+#>
+    if (!(Test-Path -Path $global:jsonFile) -or (Get-Item $global:jsonFile -ErrorAction SilentlyContinue).Length -eq 0)
+    { return @{} }
+    try
+    {
+        $obj = Get-Content -Path $global:jsonFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $h = ConvertPSObjectToHashtable $obj
+        if ($null -eq $h) { return @{} }
+        return $h
+    }
+    catch
+    {
+        Write-Debug "cmdLines store unreadable, treating as empty: $_"
+        return @{}
+    }
+}
 
+function Save-CmdLinesStore
+{
+<#
+.SYNOPSIS
+Atomically persist the command-history store.
+.DESCRIPTION
+Writes to a per-PID temp file then renames it over the target (an atomic rename on NTFS), so a concurrent reader never sees a half-written file. Never throws.
+#>
+    param([hashtable]$Store)
+    $tmp = "$($global:jsonFile).tmp.$PID"
+    try
+    {
+        ($Store | ConvertTo-Json -Depth 10) | Set-Content -Path $tmp -Encoding UTF8 -ErrorAction Stop
+        Move-Item -LiteralPath $tmp -Destination $global:jsonFile -Force -ErrorAction Stop
+    }
+    catch
+    {
+        Write-Debug "failed to save cmdLines store: $_"
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Add-CmdLineRecord
+{
+<#
+.SYNOPSIS
+Record a command line under a directory key in the command-history store.
+.DESCRIPTION
+Serializes the whole read-modify-write across all shells with a named mutex, so concurrent writes from multiple terminal tabs can no longer corrupt cmdLines.json. Reads self-heal on corruption and the write is atomic. If the lock can't be taken quickly the record is skipped rather than blocking the prompt. Never throws.
+#>
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [Parameter(Mandatory)][string]$CommandLine,
+        [int]$TimeoutMs = 750
+    )
+    $mutex = $null
+    $owned = $false
+    try
+    {
+        $mutex = New-Object System.Threading.Mutex($false, 'BoldCmdLinesJsonMutex')
+        try { $owned = $mutex.WaitOne($TimeoutMs) }
+        catch [System.Threading.AbandonedMutexException] { $owned = $true }
+        if (-not $owned) { return }
+
+        $store = Read-CmdLinesStore
+        if (!$store.ContainsKey($Dir))
+        {
+            $store[$Dir] = @($CommandLine)
+        }
+        else
+        {
+            $arr = @($store[$Dir])
+            if ($arr -contains $CommandLine) { return }
+            $store[$Dir] = $arr + $CommandLine
+        }
+        Save-CmdLinesStore -Store $store
+    }
+    catch
+    {
+        Write-Debug "Add-CmdLineRecord failed: $_"
+    }
+    finally
+    {
+        if ($owned) { try { $mutex.ReleaseMutex() } catch {} }
+        if ($null -ne $mutex) { $mutex.Dispose() }
+    }
+}
 
 function GrepOnCurDir()
 {
@@ -287,11 +377,9 @@ Interactively select a command previously run in the current directory.
 Reads the per-directory command history JSON file and presents matching commands for the current directory via fzf.
 #>
     $currentDir = (Get-Location).Path
-    if (!(Test-Path -Path $global:jsonFile) -or (Get-Item $global:jsonFile).Length -eq 0) { return '' }
-    $existingCmdLines = Get-Content -Path $global:jsonFile -Raw | ConvertFrom-Json
-    $existingCmdLines = ConvertPSObjectToHashtable $existingCmdLines
-    if ($null -eq $existingCmdLines -or -not $existingCmdLines.ContainsKey($currentDir)) { return '' }
-    $existingCmdLines[$currentDir] | fzf
+    $store = Read-CmdLinesStore
+    if (-not $store.ContainsKey($currentDir)) { return '' }
+    $store[$currentDir] | fzf
 }
 function MyCD
 {
@@ -3220,3 +3308,39 @@ function ConvertTo-AsciiFile {
     }
 }
 Set-Alias toascii ConvertTo-AsciiFile
+
+function Kill-Port {
+    <#
+    .SYNOPSIS
+    Kill the process(es) listening on (or bound to) a given TCP port.
+    .EXAMPLE
+    Kill-Port 3000
+    .EXAMPLE
+    Kill-Port 8000 -WhatIf
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [int]$Port,
+        [switch]$WhatIf
+    )
+    $pids = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique |
+        Where-Object { $_ -and $_ -ne 0 }
+    if (-not $pids) {
+        Write-Host "No process is using port $Port"
+        return
+    }
+    foreach ($procId in $pids) {
+        $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        $name = if ($proc) { $proc.ProcessName } else { '?' }
+        if ($WhatIf) {
+            Write-Host "[WhatIf] would kill PID $procId ($name) on port $Port"
+        }
+        else {
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+            Write-Host "Killed PID $procId ($name) on port $Port"
+        }
+    }
+}
+Set-Alias killport Kill-Port
