@@ -17,6 +17,7 @@ Set-Alias P pwsh
 Set-Alias gitp GitPullKeepLocal
 Set-Alias cl claude
 Set-Alias dt duptab
+set-alias cr claude-resume
 function ci {
     claude-history -g
 }
@@ -170,8 +171,10 @@ function ProfileCommands {
 Lists all functions in the common module with their synopsis and description.
 #>
     #$ErrorActionPreference=SilentlyContinue
-    get-command -module common | %{ get-help $_  } | Format-Table Name, SYNOPSIS ,DESCRIPTION
-    get-command -module bold -ErrorAction SilentlyContinue  | %{ get-help $_  } | Format-Table Name, SYNOPSIS ,DESCRIPTION
+    foreach ($mod in 'common', 'bold') {
+        get-command -module $mod -ErrorAction SilentlyContinue | %{ $c = $_; get-help $c.Name -ErrorAction SilentlyContinue | ? { $_.Name -eq $c.Name -and $_.Category -eq [string]$c.CommandType } } |
+            Format-Table Name, SYNOPSIS, @{ n = 'DESCRIPTION'; e = { $_.Description.Text -join ' ' } }
+    }
 }
 
 function Checkout-FileWithDifferentName {
@@ -640,7 +643,7 @@ If specified (non-zero), only include processes whose parent process id equals t
 }
 
 
-Function Term($Proc,$cmd="*")
+Function Term($Proc,$cmd="*",[switch]$Soft)
 {
 <#
 .SYNOPSIS
@@ -649,8 +652,20 @@ Terminates processes matching a name and optional command line pattern.
 Wildcard pattern for the process name.
 .PARAMETER cmd
 Wildcard pattern for the process command line. Defaults to '*'.
+.PARAMETER Soft
+Request a graceful shutdown via CloseMainWindow() (posts WM_CLOSE, lets the app clean up) instead of force-terminating. Windowless/background processes have no main window, so they fall back to Stop-Process.
 #>
-(Get-Process) | Where { $_.name -like $Proc}    | Where-Object CommandLine -like $cmd | ForEach-Object{Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f ($_.Id)) } | %{ Invoke-CimMethod -InputObject $_ -MethodName Terminate }
+Get-CimInstance Win32_Process | Where-Object { ($_.Name -replace '\.exe$','') -like $Proc -and $_.CommandLine -like $cmd } | ForEach-Object {
+    if ($Soft) {
+        $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+        if ($p) {
+            if ($p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() }
+            else { Stop-Process -Id $p.Id }
+        }
+    } else {
+        Invoke-CimMethod -InputObject $_ -MethodName Terminate | Out-Null
+    }
+}
 }
 
 Function KillAllPyCharm()
@@ -804,6 +819,7 @@ The file path or partial name to check for locking processes.
         [ValidateNotNullorEmpty()]
         [string]$Path
     )
+    $path=$path -replace '\\' ,'\'
 
     # Define the path to Handle.exe
     # //$Handle = "G:\Sysinternals\handle.exe"
@@ -3342,5 +3358,15 @@ function Kill-Port {
             Write-Host "Killed PID $procId ($name) on port $Port"
         }
     }
+}
+function TermJupyter
+{
+    Term python* *jupyter*
+}
+function UpdateProfile 
+{
+cd ~\Documents\Powershell
+git pull
+P
 }
 Set-Alias killport Kill-Port
