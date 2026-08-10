@@ -169,10 +169,16 @@ function ProfileCommands {
 <#
 .SYNOPSIS
 Lists all functions in the common module with their synopsis and description.
+.PARAMETER Filter
+Optional text to filter by. Matches against the function name, synopsis, or description (wildcards allowed).
 #>
+    param (
+        [string]$Filter
+    )
     #$ErrorActionPreference=SilentlyContinue
     foreach ($mod in 'common', 'bold') {
         get-command -module $mod -ErrorAction SilentlyContinue | %{ $c = $_; get-help $c.Name -ErrorAction SilentlyContinue | ? { $_.Name -eq $c.Name -and $_.Category -eq [string]$c.CommandType } } |
+            ? { -not $Filter -or $_.Name -like "*$Filter*" -or "$($_.SYNOPSIS)" -like "*$Filter*" -or ($_.Description.Text -join ' ') -like "*$Filter*" } |
             Format-Table Name, SYNOPSIS, @{ n = 'DESCRIPTION'; e = { $_.Description.Text -join ' ' } }
     }
 }
