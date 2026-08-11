@@ -2869,18 +2869,6 @@ process
     }
     explorer.exe $path
 }
-function clonenotebook()
-{
-<#
-.SYNOPSIS
-Clones the bold-dev/notebooks repo to $Notebook (defaults to C:\notebook).
-.COMPONENT
-notebook
-#>
-    $target = if ($global:Notebook) { $global:Notebook } else { 'C:\notebook' }
-    if (Test-Path $target) { Write-Warning "$target already exists"; return }
-    git clone https://github.com/bold-dev/notebooks $target
-}
 function IsAdmin()
 {
 <#
