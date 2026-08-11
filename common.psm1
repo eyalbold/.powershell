@@ -8,6 +8,12 @@
 #Write-Host "started"
 function cc 
 {
+<#
+.SYNOPSIS
+Shorthand for 'claude --continue' (resume the last Claude Code session here).
+.COMPONENT
+claude
+#>
     claude --continue
 }
 Set-Alias ss Select-String
@@ -19,6 +25,12 @@ Set-Alias cl claude
 Set-Alias dt duptab
 set-alias cr claude-resume
 function ci {
+<#
+.SYNOPSIS
+Opens claude-history global search (claude-history -g).
+.COMPONENT
+claude
+#>
     claude-history -g
 }
 
@@ -34,6 +46,8 @@ parsed here and used to `claude --resume` in that conversation's original direct
 SearchConv vimspector setup
 .EXAMPLE
 SearchConv "that bug with the sandbox"
+.COMPONENT
+claude
 #>
     param(
         [Parameter(ValueFromRemainingArguments)]
@@ -77,6 +91,8 @@ arguments, or reads it from the pipeline if none are given.
 AskClaude "what is the capital of france?"
 .EXAMPLE
 Get-Content file.py | AskClaude "explain this code"
+.COMPONENT
+claude
 #>
     param(
         [Parameter(ValueFromRemainingArguments)]
@@ -118,6 +134,8 @@ and resumes from there. Accepts a full session id or a unique prefix. Extra args
 pass through to claude, e.g. `claude-resume <id> --model opus`.
 .EXAMPLE
 claude-resume 6c072c4c-2a4b-4c43-a2b9-12389f66df5f
+.COMPONENT
+claude
 #>
     param(
         [Parameter(Mandatory, Position = 0)]
@@ -168,19 +186,30 @@ claude-resume 6c072c4c-2a4b-4c43-a2b9-12389f66df5f
 function ProfileCommands {
 <#
 .SYNOPSIS
-Lists all functions in the common module with their synopsis and description.
+Lists all functions in the common module with their synopsis and description, grouped by category.
+.DESCRIPTION
+The category of each function is taken from its .COMPONENT help keyword (e.g. git, claude, process). Functions without one are grouped under 'other'.
 .PARAMETER Filter
 Optional text to filter by. Matches against the function name, synopsis, or description (wildcards allowed).
+.PARAMETER Category
+Optional category to show (e.g. git, claude, process, files, shell). Wildcards allowed.
+.COMPONENT
+shell
 #>
     param (
-        [string]$Filter
+        [string]$Filter,
+        [string]$Category
     )
     #$ErrorActionPreference=SilentlyContinue
-    foreach ($mod in 'common', 'bold') {
-        get-command -module $mod -ErrorAction SilentlyContinue | %{ $c = $_; get-help $c.Name -ErrorAction SilentlyContinue | ? { $_.Name -eq $c.Name -and $_.Category -eq [string]$c.CommandType } } |
-            ? { -not $Filter -or $_.Name -like "*$Filter*" -or "$($_.SYNOPSIS)" -like "*$Filter*" -or ($_.Description.Text -join ' ') -like "*$Filter*" } |
-            Format-Table Name, SYNOPSIS, @{ n = 'DESCRIPTION'; e = { $_.Description.Text -join ' ' } }
+    $all = foreach ($mod in 'common', 'bold') {
+        get-command -module $mod -ErrorAction SilentlyContinue | %{ $c = $_; get-help $c.Name -ErrorAction SilentlyContinue | ? { $_.Name -eq $c.Name -and $_.Category -eq [string]$c.CommandType } }
     }
+    $cat = { $c = "$($_.Component)".Trim(); if ($c) { $c } else { 'other' } }
+    $all |
+        ? { -not $Filter -or $_.Name -like "*$Filter*" -or "$($_.SYNOPSIS)" -like "*$Filter*" -or ($_.Description.Text -join ' ') -like "*$Filter*" } |
+        ? { -not $Category -or (& $cat) -like "*$Category*" } |
+        Sort-Object $cat, Name |
+        Format-Table -GroupBy @{ n = 'Category'; e = $cat } Name, SYNOPSIS, @{ n = 'DESCRIPTION'; e = { $_.Description.Text -join ' ' } }
 }
 
 function Checkout-FileWithDifferentName {
@@ -195,6 +224,8 @@ Path to the file to check out.
 New name/path for the checked-out file.
 .PARAMETER Branch
 Git branch to check out the file from. Defaults to 'main'.
+.COMPONENT
+git
 #>
     param (
         [string]$FilePath,
@@ -240,6 +271,8 @@ Recursively converts a PSObject to a hashtable.
 Handles nested objects and arrays. Useful for working with JSON data (from ConvertFrom-Json) that needs to be mutable or key-accessible as a hashtable.
 .PARAMETER InputObject
 The PSObject, array, or scalar value to convert. Accepts pipeline input.
+.COMPONENT
+utility
 #>
     param (
         [Parameter(ValueFromPipeline)]
@@ -280,6 +313,12 @@ The PSObject, array, or scalar value to convert. Accepts pipeline input.
 
 function OptInWtKeys
 {
+<#
+.SYNOPSIS
+Enables Windows Terminal key bindings by writing enable_wt_keys=true to config.ps1.
+.COMPONENT
+shell
+#>
     echo '$global:enable_wt_keys=$true' > $(Join-Path  $PSScriptRoot "config.ps1")
 }
 
@@ -292,6 +331,8 @@ function Read-CmdLinesStore
 Safely read the per-directory command-history store as a hashtable.
 .DESCRIPTION
 Returns an empty hashtable if the file is missing, empty, or corrupt (e.g. a torn concurrent write). Never throws, so callers and the PostCommandLookupAction hook can't surface a JSON parse error.
+.COMPONENT
+history
 #>
     if (!(Test-Path -Path $global:jsonFile) -or (Get-Item $global:jsonFile -ErrorAction SilentlyContinue).Length -eq 0)
     { return @{} }
@@ -316,6 +357,8 @@ function Save-CmdLinesStore
 Atomically persist the command-history store.
 .DESCRIPTION
 Writes to a per-PID temp file then renames it over the target (an atomic rename on NTFS), so a concurrent reader never sees a half-written file. Never throws.
+.COMPONENT
+history
 #>
     param([hashtable]$Store)
     $tmp = "$($global:jsonFile).tmp.$PID"
@@ -338,6 +381,8 @@ function Add-CmdLineRecord
 Record a command line under a directory key in the command-history store.
 .DESCRIPTION
 Serializes the whole read-modify-write across all shells with a named mutex, so concurrent writes from multiple terminal tabs can no longer corrupt cmdLines.json. Reads self-heal on corruption and the write is atomic. If the lock can't be taken quickly the record is skipped rather than blocking the prompt. Never throws.
+.COMPONENT
+history
 #>
     param(
         [Parameter(Mandatory)][string]$Dir,
@@ -384,6 +429,8 @@ function GrepOnCurDir()
 Interactively select a command previously run in the current directory.
 .DESCRIPTION
 Reads the per-directory command history JSON file and presents matching commands for the current directory via fzf.
+.COMPONENT
+history
 #>
     $currentDir = (Get-Location).Path
     $store = Read-CmdLinesStore
@@ -397,6 +444,8 @@ function MyCD
 Custom cd that records the destination in PSReadLine history.
 .DESCRIPTION
 Wraps Set-Location and appends a 'cd <path>' entry to the PSReadLine history file so directory navigation is searchable via SimpHist/CdLast.
+.COMPONENT
+history
 #>
     try{
         Set-Location @args
@@ -436,6 +485,8 @@ function SimpHistEx
 Fuzzy-search command history and immediately execute the selected entry.
 .DESCRIPTION
 Calls SimpHist to pick a history entry via fzf, inserts it on the command line, and executes it.
+.COMPONENT
+history
 #>
     $va=$(SimpHist)
     [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
@@ -453,6 +504,8 @@ function SimpHist
 Fuzzy-search the full command history and return the selected entry.
 .DESCRIPTION
 Reads the PSReadLine history file, deduplicates entries, and presents them via fzf for interactive selection.
+.COMPONENT
+history
 #>
     $historyLocation = $(Get-PSReadLineOption).HistorySavePath
     $all = Get-Content $historyLocation
@@ -466,6 +519,8 @@ function StupidHist
 Returns a list of previously visited directories from command history.
 .DESCRIPTION
 Extracts 'cd' entries from the PSReadLine history file and filters to only those that currently exist on disk.
+.COMPONENT
+history
 #>
     $historyLocation = $(Get-PSReadLineOption).HistorySavePath
     $all = Get-Content $historyLocation | select-string -Pattern "^cd .:" | %{ echo ($_ -replace "^cd (.*)","`$1") } | Sort-Object -Unique 
@@ -479,6 +534,8 @@ function CdLast
 Jump to a previously visited directory using fzf.
 .DESCRIPTION
 Presents the list of known visited directories (from StupidHist) via fzf and navigates to the selected one. Also aliased as 'q'.
+.COMPONENT
+history
 #>
     $location = StupidHist | FZF
     if ($location)
@@ -495,6 +552,8 @@ function ClaudeLast
 Pick a previously visited directory via fzf and open claude there.
 .DESCRIPTION
 Uses StupidHist to list visited directories, presents them via fzf, prompts for confirmation, then runs claude.exe in the selected directory.
+.COMPONENT
+claude
 #>
     $location = StupidHist | FZF
     if (-not $location) { return }
@@ -510,6 +569,8 @@ function ConVM
 Opens a PSSession to the local 'win10' Hyper-V virtual machine.
 .DESCRIPTION
 Creates a PowerShell remoting session to the VM named 'win10' using default credentials and returns the session object.
+.COMPONENT
+remote
 #>
     $Username = "User"
     $Password = ConvertTo-SecureString "Password1" -AsPlainText -Force
@@ -525,6 +586,8 @@ function ClearShada
 Clears neovim shada (shared data) files and restarts neovim-qt.
 .DESCRIPTION
 Deletes all files in the nvim-data shada directory, then calls ResetNeo to restart the editor.
+.COMPONENT
+editor
 #>
     rm ~\AppData\Local\nvim-data\shada\*
     ResetNeo
@@ -536,6 +599,8 @@ function Which($arg)
 Finds the full path of an executable, similar to Unix 'which'.
 .PARAMETER arg
 The executable name to look up.
+.COMPONENT
+utility
 #>
     python -c "import shutil; print(shutil.which('$arg'))"
 }
@@ -557,6 +622,8 @@ If specified, returns the raw Process objects instead of the default summary (Id
 If specified, also includes descendant processes (recursively) of each match, indented under their parent.
 .PARAMETER ParentId
 If specified (non-zero), only include processes whose parent process id equals this value.
+.COMPONENT
+process
 #>
     param(
         [Parameter(Position=0)]
@@ -660,6 +727,8 @@ Wildcard pattern for the process name.
 Wildcard pattern for the process command line. Defaults to '*'.
 .PARAMETER Soft
 Request a graceful shutdown via CloseMainWindow() (posts WM_CLOSE, lets the app clean up) instead of force-terminating. Windowless/background processes have no main window, so they fall back to Stop-Process.
+.COMPONENT
+process
 #>
 Get-CimInstance Win32_Process | Where-Object { ($_.Name -replace '\.exe$','') -like $Proc -and $_.CommandLine -like $cmd } | ForEach-Object {
     if ($Soft) {
@@ -681,6 +750,8 @@ Function KillAllPyCharm()
 Kills all PyCharm-related Python and cmd processes.
 .DESCRIPTION
 Terminates python processes associated with the PyCharm debugger (pydevd) and ibsrv, as well as any cmd processes running ibsrv.
+.COMPONENT
+process
 #>
     Term python *pydevd*
     Term python *ibsrv*
@@ -697,6 +768,8 @@ Uses nvr (neovim-remote) to open the file in an existing neovim server. If nvr f
 File path to open.
 .PARAMETER line
 Optional line number to jump to.
+.COMPONENT
+editor
 #>
     Write-Host $ar $line
     $fileArg = $ar
@@ -727,6 +800,8 @@ Function DelProcess($name)
 Kills all processes whose name contains the given string.
 .PARAMETER name
 Substring to match against process names.
+.COMPONENT
+process
 #>
     ps | Where-Object -Property ProcessName  -Like "*$name*"| %{Write-Host $_.Id ,$_.ProcessName ;$_.Kill()}
 }
@@ -737,6 +812,8 @@ function TranslatePath($fil)
 Converts a WSL/Linux path to a Windows path using wslpath.
 .PARAMETER fil
 The WSL path to convert.
+.COMPONENT
+remote
 #>
     wsl bash -c "wslpath -w '$fil'"
 }
@@ -747,6 +824,8 @@ function RunInBash
 Sources ~/.bash_profile in WSL and runs the given command.
 .DESCRIPTION
 Joins all arguments into a single bash command line, sources /home/ekarni/.bash_profile, then executes the command in WSL bash.
+.COMPONENT
+remote
 #>
     $cmd = $args -join ' '
 $c= @" 
@@ -764,6 +843,8 @@ Brings a process window to the foreground, restoring it if minimized.
 Uses Win32 API (SetForegroundWindow / ShowWindow) to activate the main window of the named process. Strips the .exe extension automatically.
 .PARAMETER ProcessName
 Name of the process whose window should be brought to focus.
+.COMPONENT
+process
 #>
     param(
         [Parameter(Mandatory)]
@@ -816,6 +897,8 @@ Finds processes that have a lock on a given file or path.
 Uses Sysinternals handle.exe to enumerate open handles and returns process info (name, PID, type, user, path) for any process locking the specified path.
 .PARAMETER Path
 The file path or partial name to check for locking processes.
+.COMPONENT
+process
 #>
     [cmdletbinding()]
     Param(
@@ -873,6 +956,8 @@ Copies all files in a folder to a Hyper-V virtual machine.
 Name of the Hyper-V VM to copy files to.
 .PARAMETER FromFolder
 Source folder path. Defaults to the current directory.
+.COMPONENT
+remote
 #>
     param(
         [parameter (mandatory = $true, valuefrompipeline = $true)]
@@ -894,6 +979,8 @@ function NewVMDrive
 Maps the VM's C: drive as a persistent network drive (V:).
 .DESCRIPTION
 Creates a PSDrive pointing to \\192.168.10.2\c$ using stored credentials, making the VM's file system directly accessible from the host.
+.COMPONENT
+remote
 #>
     $Username = "user"
     $Password = ConvertTo-SecureString "Password1" -AsPlainText -Force
@@ -907,6 +994,8 @@ function GetGitStash
 Shows the diff of stash entries named 'mychanges'.
 .DESCRIPTION
 Lists all stash entries, filters by the name 'mychanges', and shows the diff of each matching stash against its parent commit.
+.COMPONENT
+git
 #>
     git stash list | ss mychanges | %{ $_ -replace ":.*$"} | %{ git diff $_^1 $_}
 }
@@ -919,6 +1008,8 @@ Searches the last N commits for a specific string.
 Number of recent commits to search.
 .PARAMETER line
 String pattern to search for in each commit's diff.
+.COMPONENT
+git
 #>
     $commits= git log --pretty=format:%h -n $n
     $commits | %{ git show $_ | select-string $line} 
@@ -933,6 +1024,8 @@ Removes a commit from history using interactive rebase (drop).
 Looks up the commit hash by its message, then sets GIT_SEQUENCE_EDITOR to a sed command that marks it as 'drop' in the rebase todo list.
 .PARAMETER commit
 Commit message (or part of it) to search for and remove.
+.COMPONENT
+git
 #>
     $commitid=git log --pretty="%h" --grep=$commit
 
@@ -960,6 +1053,8 @@ function ExtractFromLastStash($file)
 Gets the diff of a specific file from the most recent stash.
 .PARAMETER file
 Path of the file to extract the diff for.
+.COMPONENT
+git
 #>
     $x=git diff stash@`{0`}^1 stash@`{0`} -- $file 
     return $x
@@ -975,6 +1070,8 @@ Lists available stashes, prompts the user to pick one by index (if not provided)
 The file path to restore from the stash.
 .PARAMETER StashIndex
 Index of the stash to use (e.g. 0 for stash@{0}). If omitted, the user is prompted.
+.COMPONENT
+git
 #>
     param (
         [Parameter(Mandatory = $true)]
@@ -1017,6 +1114,8 @@ Creates a named stash without modifying the working tree (silent stash).
 Runs 'git stash create' to create a stash object and immediately stores it with a name via 'git stash store', leaving the working tree unchanged.
 .PARAMETER name
 The name/message to assign to the stash entry.
+.COMPONENT
+git
 #>
     git stash store $(git stash create) -m $name
 }
@@ -1085,6 +1184,8 @@ function RestartWsl()
 Restarts the WSL (Windows Subsystem for Linux) service.
 .DESCRIPTION
 Restarts the LxssManager service, which forces a full WSL restart.
+.COMPONENT
+remote
 #>
     Get-Service LxssManager | Restart-Service
 
@@ -1098,6 +1199,8 @@ Downloads and installs a specified neovim release.
 Downloads nvim-win64.zip for the given release tag from GitHub, backs up the current Neovim installation to nvim-temp, and extracts the new version.
 .PARAMETER typ
 Release tag to download (e.g. 'nightly', 'v0.9.0').
+.COMPONENT
+editor
 #>
     cd ~ 
     Write-Host "usage: new-version-zip-filename (ie nightly)"
@@ -1123,6 +1226,8 @@ function Add-ToPath {
 Permanently adds a directory to the machine-level system PATH.
 .PARAMETER PathToAdd
 The directory path to append to PATH. No-op if already present.
+.COMPONENT
+windows
 #>
     param (
         [string]$PathToAdd
@@ -1149,6 +1254,8 @@ function FindGitFile ($x)
 Shows the full git history for a file, following renames.
 .PARAMETER x
 File path to trace through git history.
+.COMPONENT
+git
 #>
     git log --follow -- $x
 }
@@ -1163,6 +1270,8 @@ Boolean condition to evaluate.
 Value returned when condition is true.
 .PARAMETER falsePart
 Value returned when condition is false.
+.COMPONENT
+utility
 #>
     if ($condition) {
         return $truePart
@@ -1188,6 +1297,8 @@ Working directory for the new process. Defaults to the current directory.
 Keep the new window open after the script completes.
 .PARAMETER ArgumentList
 Additional arguments to pass to the new PowerShell process.
+.COMPONENT
+shell
 #>
     [CmdletBinding()]
     param(
@@ -1240,7 +1351,10 @@ function DebugIt {
 Sets up SSH tunnel and kubectl port-forward for remote debugging.
 .DESCRIPTION
 Opens an SSH tunnel to the remote server with local port forwarding, then sets up kubectl port-forward from a running pod to localhost for debugger connectivity.
+.COMPONENT
+remote
 #>
+
     # SSH with port forwarding
     Write-Host "Setting up SSH tunnel for debugging..." -ForegroundColor Cyan
     Start-Process powershell -ArgumentList "-Command ssh ubuntu@54.228.92.153 -L1234:localhost:8888"
@@ -1268,6 +1382,8 @@ The first sequence to zip.
 The second sequence to zip. Defaults to an integer counter (enumerate mode).
 .PARAMETER ResultSelector
 A script block that defines how to combine elements. Defaults to returning an array of both elements.
+.COMPONENT
+utility
 #>
 [CmdletBinding()]
 Param(
@@ -1299,6 +1415,8 @@ Uses Select-Zip to pair elements and wraps each pair in a System.Tuple, scaling 
 The first array.
 .PARAMETER Array2
 The second array (values multiplied by 100 in the resulting tuples).
+.COMPONENT
+utility
 #>
     param (
         [Parameter(Mandatory=$true)]
@@ -1326,7 +1444,10 @@ function Find {
      Exclude hidden files and directories
  .PARAMETER exec
   Accept a script block to execute and pass it $_ param
- #> 
+ 
+.COMPONENT
+files
+#> 
  param(
      [Parameter(Mandatory=$true)]
      [string]$path ,
@@ -1392,7 +1513,10 @@ function Find {
  Lists files changed in a specific git commit.
  .PARAMETER cmt
  Commit hash or reference.
- #>
+ 
+.COMPONENT
+git
+#>
      return $(git diff-tree --no-commit-id --name-only $cmt -r)
  }
  function RunPreCommitOnCommit($cmt) {
@@ -1401,7 +1525,10 @@ function Find {
  Runs pre-commit hooks against the files changed in a specific commit.
  .PARAMETER cmt
  Commit hash or reference.
- #>
+ 
+.COMPONENT
+git
+#>
      pre-commit run  --files $(git diff-tree --no-commit-id --name-only $cmt -r)
  }
  function AddOnModified($ext) {
@@ -1410,7 +1537,10 @@ function Find {
  Stages all modified tracked files, optionally filtered by extension.
  .PARAMETER ext
  Optional file extension pattern to filter (e.g. '.py').
- #>
+ 
+.COMPONENT
+git
+#>
  
      if ($ext) {
  
@@ -1427,7 +1557,10 @@ function Find {
  Shows all diffs for a file across the full git history (including reflog).
  .PARAMETER fil
  File path to inspect.
- #>
+ 
+.COMPONENT
+git
+#>
  
      git log --reflog --follow --format=%h -- $fil | %{ Write-host " change $_"; git --no-pager diff $_ -- $fil } 
  }
@@ -1437,14 +1570,20 @@ function Find {
  Shows commit history for a file or directory across all branches and reflog.
  .PARAMETER fil
  File or directory path to inspect.
- #>
+ 
+.COMPONENT
+git
+#>
      git log --all --first-parent --remotes --reflog --author-date-order -- $fil
  }
  function StagedFiles() {
      <#
      .SYNOPSIS
      Lists files currently staged for the next commit.
-     #>
+     
+.COMPONENT
+git
+#>
          git diff --name-only --cached
  }
  function GitPullAdvanced ()
@@ -1464,7 +1603,10 @@ function Find {
  Remote branch to pull/checkout.
  .PARAMETER repository
  Remote repository name (required when branch is specified).
- #>
+ 
+.COMPONENT
+git
+#>
      param (
          [parameter()][switch]$keeplocalinconflict =$null,
          [parameter()][switch]$dontkeepstash=$false,
@@ -1595,7 +1737,10 @@ no just cancels (type exactly)
  Squashes the last N commits into one via interactive rebase.
  .PARAMETER count
  Number of recent commits to squash together.
- #>
+ 
+.COMPONENT
+git
+#>
  $commitHashes = git log --pretty=format:%h -n $count
  
  $commands= ( 0..$($count-2) ) |  %{   "sed -i 's/^pick $($commitHashes[$_])/squash $($commitHashes[$_])/' `$file"    }
@@ -1647,7 +1792,10 @@ no just cancels (type exactly)
  
  .OUTPUTS
  Array of unique file paths that match the partial filename
- #>
+ 
+.COMPONENT
+git
+#>
      [CmdletBinding()]
      param(
          [Parameter(Mandatory=$true, Position=0)]
@@ -1735,6 +1883,8 @@ no just cancels (type exactly)
 Pipeline filter: passes through items that do NOT match any pattern in the list.
 .PARAMETER ls
 Array of regex patterns to exclude. Pipeline items matching any pattern are dropped.
+.COMPONENT
+utility
 #>
      Process {
          $el=$_;
@@ -1753,6 +1903,8 @@ Array of regex patterns to exclude. Pipeline items matching any pattern are drop
 Pipeline filter: passes through items that match at least one pattern in the list.
 .PARAMETER ls
 Array of regex patterns. Only pipeline items matching at least one are kept.
+.COMPONENT
+utility
 #>
      Process {
          $el=$_;
@@ -1768,7 +1920,10 @@ Array of regex patterns. Only pipeline items matching at least one are kept.
      <#
      .SYNOPSIS
      Returns extended process info (owner, command line, creation date) via WMI.
-     #>
+     
+.COMPONENT
+process
+#>
          return  Get-WmiObject Win32_Process | Select Name,ProcessId,ParentProcessId,@{Name="UserName";Expression={$_.GetOwner().User}}, CommandLine, @{Name='CreationDate'; Expression={ [System.Management.ManagementDateTimeConverter]::ToDateTime($_.CreationDate)}}
  }
  function Ext
@@ -1777,7 +1932,10 @@ Array of regex patterns. Only pipeline items matching at least one are kept.
  Runs a script block in a new window using the current PowerShell host executable.
  .PARAMETER ScriptBlock
  The script block to execute.
- #>
+ 
+.COMPONENT
+shell
+#>
          [CmdletBinding()]
          param (
                  [parameter(Position=0)]
@@ -1794,7 +1952,10 @@ Array of regex patterns. Only pipeline items matching at least one are kept.
  Runs a script block in a new pwsh window.
  .PARAMETER ScriptBlock
  The script block to execute.
- #>
+ 
+.COMPONENT
+shell
+#>
          [CmdletBinding()]
          param (
                  [parameter(Position=0)]
@@ -1812,7 +1973,10 @@ Array of regex patterns. Only pipeline items matching at least one are kept.
  Displays pipeline data in Out-GridView from a separate pwsh process.
  .PARAMETER v
  The data to display.
- #>
+ 
+.COMPONENT
+shell
+#>
      $v | Export-Clixml -Path c:\temp\outgridview.tmp
          ExtPwsh { try{  $v = Import-Clixml -Path c:\temp\outgridview.tmp 
              $v | Out-GridView
@@ -1827,7 +1991,10 @@ Array of regex patterns. Only pipeline items matching at least one are kept.
  <#
  .SYNOPSIS
  Adds a 'git tree' alias that shows a decorated one-line graph of all branches.
- #>
+ 
+.COMPONENT
+git
+#>
      git config --global alias.tree "log --oneline --decorate --all --graph"
  }
 
@@ -1850,7 +2017,10 @@ function Get-MD5 {
 
     .EXAMPLE
     Get-MD5 -Path "C:\file.txt"
-    #>
+    
+.COMPONENT
+files
+#>
     [CmdletBinding(DefaultParameterSetName='String')]
     param(
         [Parameter(Mandatory=$true, ParameterSetName='String', Position=0)]
@@ -1876,7 +2046,10 @@ Function Format-ErrorWithStackTrace($ErrorRecord)
 Formats an error record as a detailed string with enhanced stack trace and source lines.
 .PARAMETER ErrorRecord
 The error record to format (e.g. from $Error[0] or a catch block's $_).
+.COMPONENT
+utility
 #>
+
     # Helper function to get source line from file
     function Get-SourceLine($scriptPath, $lineNumber) {
         if ($scriptPath -and $lineNumber -and (Test-Path $scriptPath)) {
@@ -1997,7 +2170,10 @@ function FindFileRg {
     .EXAMPLE
     FindRg "TODO" -Path "C:\Projects" -FilePattern "*.cs"
     Searches for "TODO" in all .cs files under C:\Projects
-    #>
+    
+.COMPONENT
+files
+#>
     param(
         [Parameter(Mandatory=$true, Position=0)]
         [string]$SearchString,
@@ -2022,6 +2198,14 @@ function FindFileRg {
 }
 
 function Get-Histogram {
+<#
+.SYNOPSIS
+Builds a histogram (array of bucket objects) from numeric data.
+.DESCRIPTION
+Buckets pipeline data by value with configurable bucket width/count and min/max. Supports weighted data ((weight, value) pairs via -Weighted) and an ASCII console visualization via -Visualize.
+.COMPONENT
+utility
+#>
     [CmdletBinding(DefaultParameterSetName='BucketCount')]
     Param(
         [Parameter(Mandatory, ValueFromPipeline, Position=1)]
@@ -2234,6 +2418,8 @@ function SetPrimary()
 <#
 .SYNOPSIS
 Sets the DELL U2419H monitor as the primary display.
+.COMPONENT
+windows
 #>
     $di=  $(Get-DisplayInfo | ? {$_.DisplayName -eq  "DELL U2419H"} ).DisplayId
     Set-DisplayPrimary -DisplayId $di
@@ -2247,6 +2433,8 @@ Sets extended display mode and makes one of the DisplayPort monitors the primary
 Finds all DisplayPort-connected monitors via Get-DisplayInfo, enables them as extended displays, and sets the one at PrimaryIndex (1-based) as the primary display.
 .PARAMETER PrimaryIndex
 1-based index of the DisplayPort monitor to make primary. Defaults to 1.
+.COMPONENT
+windows
 #>
     param(
         [ValidateRange(1, 99)]
@@ -2275,6 +2463,8 @@ function RunWTAdmin()
 <#
 .SYNOPSIS
 Launches Windows Terminal with administrator privileges.
+.COMPONENT
+shell
 #>
      Start-process -Verb RunAs "~\AppData\Local\Microsoft\WindowsApps\wt.exe"
 }
@@ -2282,6 +2472,8 @@ function CloseClaudeDesktop() {
 <#
 .SYNOPSIS
 Closes the Claude desktop app (WindowsApps package).
+.COMPONENT
+claude
 #>
     Get-process Claude | where {$_.Path -like "*WindowsApp*" }  | %{ echo $_ } | Stop-Process
     }
@@ -2313,6 +2505,8 @@ $items = @(
 $tray = New-TrayIcon -Tooltip 'My App' -MenuItems $items -HotKey 'Ctrl+Alt+T'
 # To remove it later:
 # $tray.PowerShell.Stop(); $tray.Runspace.Dispose()
+.COMPONENT
+windows
 #>
     param(
         [string]$Tooltip = 'PowerShell Tray',
@@ -2503,6 +2697,12 @@ public static class HotKeyHelper {
 
 # ---------- Auto-Claude Docker helpers ----------
 function Find-AutoClaudeContainer {
+<#
+.SYNOPSIS
+Returns the name of the first running docker container whose name contains 'claude'.
+.COMPONENT
+claude
+#>
     $container = docker ps --format "{{.Names}}" 2>$null | Where-Object { $_ -match 'claude' } | Select-Object -First 1
     if (-not $container) {
         Write-Error "No running auto-claude container found"
@@ -2512,6 +2712,12 @@ function Find-AutoClaudeContainer {
 }
 
 function Copy-ToAutoClaude {
+<#
+.SYNOPSIS
+Copies a host file/folder into the running auto-claude docker container (default /workspace).
+.COMPONENT
+claude
+#>
     param(
         [Parameter(Mandatory, Position = 0)][string]$HostPath,
         [Parameter(Position = 1)][string]$ContainerPath = "/workspace"
@@ -2541,6 +2747,8 @@ Fast check whether a TCP port is listening on localhost.
 Port number to test.
 .PARAMETER TimeoutMs
 Connection timeout in milliseconds (default 200).
+.COMPONENT
+network
 #>
     try {
         $tcp = [System.Net.Sockets.TcpClient]::new()
@@ -2558,6 +2766,8 @@ Kills the process(es) listening on / owning the given TCP port.
 Port number whose owning process should be killed.
 .PARAMETER WhatIf
 List the processes that would be killed without killing them.
+.COMPONENT
+network
 #>
     $procIds = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique |
@@ -2577,16 +2787,36 @@ List the processes that would be killed without killing them.
 Set-Alias killport Kill-Port
 function RunClaudeDir($d)
 {
+<#
+.SYNOPSIS
+cd into the given directory and start claude there.
+.COMPONENT
+claude
+#>
     cd $d
     claude
 }
 
 function duptab {
+<#
+.SYNOPSIS
+Opens a new Windows Terminal tab in the current directory, same window. Aliased as 'dt'.
+.COMPONENT
+shell
+#>
     wt -w 0 nt -d $PWD.Path
 }
 
 function FindMainProcess($name, [switch]$getpath, [switch]$first)
 {
+<#
+.SYNOPSIS
+Returns the top-of-tree process for processes whose name contains the given string.
+.DESCRIPTION
+Finds processes matching the name and returns the one(s) whose parent is not itself in the matching set (the main/root process). Solves Electron/Chrome multi-process targeting. Falls back to matching file Description or MainWindowTitle when the exe name doesn't match. -getpath returns the executable path instead of the PID; -first returns only the first result.
+.COMPONENT
+process
+#>
     $procs = Get-CimInstance Win32_Process -Filter "Name LIKE '%$name%'"
     if (-not $procs) {
         # Fallback: resolve by display name (file Description or MainWindowTitle)
@@ -2612,6 +2842,8 @@ function Respawn($name)
 <#
 .SYNOPSIS
 Kills the main process(es) matching $name and relaunches each from its original path via Start-Process (runs as current user).
+.COMPONENT
+process
 #>
     $paths = @(FindMainProcess $name -getpath)
     if (-not $paths) { Write-Warning "No process found matching '$name'"; return }
@@ -2627,6 +2859,8 @@ Launches an executable via explorer.exe so it runs under the current user
 shell token (not whatever cmd/elevated token the caller has). Use for
 clean-launch testing of PoC binaries from a debugger / replay step.
 With -Kill, first kills any running process matching the executable's name.
+.COMPONENT
+process
 #>
     if (-not (Test-Path $path)) { Write-Warning "path not found: $path"; return }
     if ($Kill) {
@@ -2640,6 +2874,8 @@ function clonenotebook()
 <#
 .SYNOPSIS
 Clones the bold-dev/notebooks repo to $Notebook (defaults to C:\notebook).
+.COMPONENT
+notebook
 #>
     $target = if ($global:Notebook) { $global:Notebook } else { 'C:\notebook' }
     if (Test-Path $target) { Write-Warning "$target already exists"; return }
@@ -2650,6 +2886,8 @@ function IsAdmin()
 <#
 .SYNOPSIS
 Returns $true if the current pwsh session is elevated (running as Administrator).
+.COMPONENT
+shell
 #>
     ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
@@ -2660,6 +2898,8 @@ function RunWindowsMcp([switch]$NoAdmin)
 Kills any running windows-mcp instance and starts a fresh server via C:\gitproj\Windows-MCP\serve.ps1 in a new pwsh window. Requires admin unless -NoAdmin is passed.
 The previous server usually runs as python.exe (not "windows-mcp"), so we
 locate it by port + commandline rather than process name.
+.COMPONENT
+windows
 #>
     if (-not $NoAdmin -and -not (IsAdmin)) {
         Write-Error "RunWindowsMcp requires admin. Re-launch pwsh elevated, or pass -NoAdmin to skip the check."
@@ -2688,15 +2928,33 @@ locate it by port + commandline rather than process name.
 }
 function startfol($file) 
 {
+<#
+.SYNOPSIS
+Opens the containing folder of the given file in Explorer.
+.COMPONENT
+files
+#>
     $x=gi $file  
     cmd /C "start  $($x.Directory.FullName)"
 }
 function GetAppsProcesses
 {
+<#
+.SYNOPSIS
+Lists processes that have a visible main window (Id, name, window title).
+.COMPONENT
+process
+#>
     Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Format-table Id, ProcessName, MainWindowTitle
 }
 function UnicodeConsole
 {
+<#
+.SYNOPSIS
+Switches console output encoding and Python IO encoding to UTF-8.
+.COMPONENT
+shell
+#>
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $env:PYTHONIOENCODING="utf-8"
 }
 
@@ -2704,6 +2962,8 @@ Function Get-ProcessCwd {
 <#
 .SYNOPSIS
 Reads the current working directory of a process by reading its PEB. 64-bit only.
+.COMPONENT
+process
 #>
     param([Parameter(Mandatory)][int]$Id)
     if (-not ('Util.PebReader' -as [type])) {
@@ -2745,6 +3005,14 @@ public static extern int NtQueryInformationProcess(IntPtr h, int infoClass, IntP
 
 function AddWrapper([parameter(mandatory=$true, position=0)][string]$For,[parameter(mandatory=$true, position=1)][string]$To)
 {
+<#
+.SYNOPSIS
+Builds a dynamic-parameter dictionary that forwards one command's parameters to a wrapper function.
+.DESCRIPTION
+Used from a DynamicParam block: copies the parameters of command -For, excluding those the wrapper -To already declares, so the wrapper transparently accepts the wrapped command's parameters.
+.COMPONENT
+utility
+#>
     $paramDictionary = [System.Management.Automation.RuntimeDefinedParameterDictionary]::new()
     $paramset= $(Get-Command $For).Parameters.Values | %{[System.Management.Automation.RuntimeDefinedParameter]::new($_.Name,$_.ParameterType,$_.Attributes)}
     $paramsetlet= $(Get-Command empt).Parameters.Keys
@@ -2757,6 +3025,12 @@ function AddWrapper([parameter(mandatory=$true, position=0)][string]$For,[parame
 
 function GetRestOfParams()
 {
+<#
+.SYNOPSIS
+Filters a bound-parameters hashtable down to the parameters accepted by a target command (for splatting).
+.COMPONENT
+utility
+#>
     Param([parameter(mandatory=$true, position=1)][hashtable]$params,
         [parameter(mandatory=$true, position=0)][string]$dstsource,
         [parameter(mandatory=$false, position=2)][switch][bool]$dontincludecommon=$true)
@@ -2777,6 +3051,12 @@ function GetRestOfParams()
 
 function Empt
 {
+<#
+.SYNOPSIS
+Minimal do-nothing cmdlet, used to enumerate PowerShell common parameters in AddWrapper.
+.COMPONENT
+utility
+#>
     [CmdletBinding()]
     Param([parameter(mandatory=$true, position=0)][string]$aaaa)
     1
@@ -2784,6 +3064,12 @@ function Empt
 
 function Let
 {
+<#
+.SYNOPSIS
+Demo wrapper showing AddWrapper/GetRestOfParams dynamic parameter forwarding (wraps Get).
+.COMPONENT
+utility
+#>
     [CmdletBinding()]
     Param([parameter(mandatory=$true, position=0)][string]$Option,[parameter(mandatory=$false, position=0)][string]$OptionB)
     DynamicParam
@@ -2802,6 +3088,12 @@ function Let
 
 function Get
 {
+<#
+.SYNOPSIS
+Demo target function for the Let/AddWrapper parameter-forwarding example.
+.COMPONENT
+utility
+#>
     [CmdLetBinding()]
     Param([parameter(mandatory=$false, position=0)][string]$OptionA,
         [parameter(mandatory=$false, position=1)][string]$OptionB)
@@ -2817,6 +3109,8 @@ Takes ownership first if the initial icacls grant fails (typical for files
 owned by SYSTEM/TrustedInstaller or another user).
 .PARAMETER Path
 Root file or directory to fix. Defaults to current directory.
+.COMPONENT
+files
 #>
     param(
         [Parameter(Position=0)][string]$Path = (Get-Location).Path
@@ -2854,6 +3148,8 @@ When Windows reports Bluetooth as off but bthserv is running, the radio
 adapter itself may have failed to start (typically NTStatus 0xC000025E
 STATUS_DEVICE_POWER_FAILURE). Disable/Enable-PnpDevice often does NOT clear
 this; pnputil /restart-device does. Requires elevation.
+.COMPONENT
+windows
 #>
     param(
         [string]$Match = '*Bluetooth*'
@@ -2878,6 +3174,8 @@ function ConvertTo-LineEnding {
 <#
 .SYNOPSIS
 Convert line endings of a file in place (LF <-> CRLF). Preserves bytes otherwise.
+.COMPONENT
+files
 #>
     param(
         [Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string]$Path,
@@ -2899,11 +3197,23 @@ Convert line endings of a file in place (LF <-> CRLF). Preserves bytes otherwise
 }
 
 function dos2unix {
+<#
+.SYNOPSIS
+Converts file line endings to LF (wrapper around ConvertTo-LineEnding).
+.COMPONENT
+files
+#>
     param([Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string[]]$Path)
     process { foreach ($p in $Path) { ConvertTo-LineEnding -Path $p -Eol LF } }
 }
 
 function unix2dos {
+<#
+.SYNOPSIS
+Converts file line endings to CRLF (wrapper around ConvertTo-LineEnding).
+.COMPONENT
+files
+#>
     param([Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string[]]$Path)
     process { foreach ($p in $Path) { ConvertTo-LineEnding -Path $p -Eol CRLF } }
 }
@@ -2914,6 +3224,8 @@ function tail {
 <#
 .SYNOPSIS
 Unix-like tail. Prints the last N lines of a file; -f follows for new content.
+.COMPONENT
+files
 #>
     param(
         [Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)][string]$Path,
@@ -2942,6 +3254,8 @@ Python executable used to run nbconvert. Defaults to .\.venv11\Scripts\python.ex
 Jupyter kernel name. Default 'python3'.
 .PARAMETER Timeout
 Per-cell execution timeout in seconds. Default 120.
+.COMPONENT
+notebook
 #>
     [CmdletBinding(DefaultParameterSetName='ByIndex')]
     param(
@@ -3065,6 +3379,8 @@ default (5-10s), so treat this as a hint. Default 5000.
 Show-Balloon -Title 'Build' -Text 'Compile finished' -Icon Info
 .EXAMPLE
 'done' | Show-Balloon -Title 'Job'
+.COMPONENT
+windows
 #>
     [CmdletBinding()]
     param(
@@ -3099,6 +3415,12 @@ Show-Balloon -Title 'Build' -Text 'Compile finished' -Icon Info
 }
 function outhost
 {
+<#
+.SYNOPSIS
+Pipeline sink that writes each item via Write-Host (forces console output).
+.COMPONENT
+utility
+#>
     [CmdletBinding()]
     param([Parameter(ValueFromPipeline=$true)] $InputObject)
     process { $InputObject | %{ Write-Host $_ }  }
@@ -3111,7 +3433,10 @@ function CdbAttach {
     .EXAMPLE
     CdbAttach 9700
     CdbAttach 9700 -Port 5010
-    #>
+    
+.COMPONENT
+remote
+#>
     param(
         [Parameter(Mandatory, Position = 0)] [int]$TargetPid,
         [int]$Port = 5005
@@ -3142,6 +3467,8 @@ su make setup
 su { choco install git -y; refreshenv }
 .EXAMPLE
 su Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
+.COMPONENT
+shell
 #>
     if ($args.Count -eq 1 -and $args[0] -is [scriptblock]) {
         $cmd = $args[0].ToString()
@@ -3178,6 +3505,8 @@ runs choco.exe in place when already elevated, or relaunches it via
 invoked to avoid recursion.
 .EXAMPLE
 choco install git -y
+.COMPONENT
+shell
 #>
     su choco.exe @args
 }
@@ -3197,6 +3526,8 @@ added/overwritten only -- variables deleted from the registry are not removed
 from the current process. Also aliased as 'refreshenv2'.
 .EXAMPLE
 Update-Environment
+.COMPONENT
+shell
 #>
     $scopes = @(
         @{ Reg = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'; Target = 'Machine' },
@@ -3235,7 +3566,10 @@ function remsess {
     .EXAMPLE
     remsess $s { gci c:\ } | %{ Write-Host $_ }
     remsess $s "Get-Process"
-    #>
+    
+.COMPONENT
+remote
+#>
     param(
         [Parameter(Mandatory, Position=0)]
         [System.Management.Automation.Runspaces.PSSession]$Session,
@@ -3263,7 +3597,10 @@ function Reload-Profile {
     <#
     .SYNOPSIS
     Reload the current PowerShell profile.
-    #>
+    
+.COMPONENT
+shell
+#>
     . $PROFILE
 }
 Set-Alias reload Reload-Profile
@@ -3272,7 +3609,10 @@ function p {
     <#
     .SYNOPSIS
     Reinvoke the current executable (e.g. restart pwsh in-place).
-    #>
+    
+.COMPONENT
+shell
+#>
     $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     & $exe
 }
@@ -3289,7 +3629,10 @@ function ConvertTo-AsciiFile {
     ConvertTo-AsciiFile .\common.psm1
     .EXAMPLE
     Get-ChildItem *.ps1 | ConvertTo-AsciiFile -WhatIf
-    #>
+    
+.COMPONENT
+files
+#>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName, Position = 0)]
@@ -3339,7 +3682,10 @@ function Kill-Port {
     Kill-Port 3000
     .EXAMPLE
     Kill-Port 8000 -WhatIf
-    #>
+    
+.COMPONENT
+network
+#>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, Position = 0)]
@@ -3367,10 +3713,22 @@ function Kill-Port {
 }
 function TermJupyter
 {
+<#
+.SYNOPSIS
+Kills python processes whose command line mentions jupyter.
+.COMPONENT
+notebook
+#>
     Term python* *jupyter*
 }
 function UpdateProfile 
 {
+<#
+.SYNOPSIS
+Pulls the latest profile repo (~/Documents/PowerShell) and restarts pwsh.
+.COMPONENT
+shell
+#>
 cd ~\Documents\Powershell
 git pull
 P
